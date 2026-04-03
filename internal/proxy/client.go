@@ -27,6 +27,12 @@ type Client struct {
 	onClose func(c *Client)
 
 	closeOnce sync.Once
+
+	// wg tracks the read/write loop goroutines launched by Start.
+	wg sync.WaitGroup
+
+	// cancel stops the read/write loops.
+	cancel context.CancelFunc
 }
 
 // NewClient creates a new client handler.
@@ -60,30 +66,53 @@ func (c *Client) Send(payload []byte) bool {
 	}
 }
 
-// Run starts the client read/write loops. It blocks until the client disconnects.
-func (c *Client) Run(ctx context.Context) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	defer c.Close()
+// WriteDirect writes a frame directly to the underlying connection,
+// bypassing the send channel. It is intended for replaying cached config
+// frames BEFORE Start is called, when the connection is not yet shared
+// with any goroutine. It must NOT be called concurrently with Start or
+// the write loop.
+func (c *Client) WriteDirect(payload []byte) error {
+	return protocol.WriteFrame(c.conn, payload)
+}
 
-	var wg sync.WaitGroup
-	wg.Add(2)
+// Start launches the client read and write loops as background goroutines.
+// It returns immediately. The write loop begins draining the send channel
+// as soon as Start returns, so it is safe to call Send (including cached
+// config replay) after Start without risking a "slow consumer" disconnect.
+// Call Wait to block until the client disconnects.
+func (c *Client) Start(ctx context.Context) {
+	ctx, cancel := context.WithCancel(ctx)
+	c.cancel = cancel
+
+	c.wg.Add(2)
 
 	// Writer goroutine: send frames to client
 	go func() {
-		defer wg.Done()
+		defer c.wg.Done()
 		c.writeLoop(ctx)
 		cancel()
 	}()
 
 	// Reader goroutine: read frames from client
 	go func() {
-		defer wg.Done()
+		defer c.wg.Done()
 		c.readLoop(ctx)
 		cancel()
 	}()
+}
 
-	wg.Wait()
+// Wait blocks until both the read and write loops have finished, then
+// closes the client connection. It must be called after Start.
+func (c *Client) Wait() {
+	c.wg.Wait()
+	c.Close()
+}
+
+// Run starts the client read/write loops and blocks until the client
+// disconnects. It is a convenience wrapper around Start + Wait.
+func (c *Client) Run(ctx context.Context) {
+	c.Start(ctx)
+	c.Wait()
 }
 
 func (c *Client) readLoop(ctx context.Context) {

@@ -122,7 +122,10 @@ func (p *Proxy) handleNewConnection(ctx context.Context, conn net.Conn) {
 
 	p.registerClient(client)
 
-	// Send cached config to new client
+	// Send cached config directly to the connection before starting the
+	// read/write loops. WriteDirect bypasses the send channel, so there
+	// is no risk of a "slow consumer" disconnect regardless of cache size.
+	// Once the loops start, subsequent frames flow through the channel.
 	go func() {
 		p.sendCachedConfig(client)
 		client.Run(ctx)
@@ -158,8 +161,9 @@ func (p *Proxy) sendCachedConfig(c *Client) {
 
 	p.logger.Debug("sending cached config to client", "client", c.Addr(), "frames", len(frames))
 	for _, frame := range frames {
-		if !c.Send(frame) {
-			return // client disconnected or buffer full
+		if err := c.WriteDirect(frame); err != nil {
+			p.logger.Debug("failed to send cached config frame", "client", c.Addr(), "error", err)
+			return
 		}
 	}
 }

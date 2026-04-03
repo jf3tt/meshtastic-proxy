@@ -27,7 +27,7 @@ data:
     id = ""
     # Set to your host's LAN-facing interface so that mDNS is advertised
     # into the home network rather than into CNI/overlay networks.
-    interfaces = ["eth0"]
+    interfaces = ["enx00155dc6c81d"]
 
     [logging]
     level = "info"
