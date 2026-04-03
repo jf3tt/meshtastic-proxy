@@ -1,0 +1,49 @@
+# Meshtastic TCP Proxy configuration
+
+[node]
+# Address of the Meshtastic node (host:port)
+address = "192.168.1.100:4403"
+
+# Initial reconnect interval after connection loss
+reconnect_interval = "1s"
+
+# Maximum reconnect interval (exponential backoff cap)
+max_reconnect_interval = "30s"
+
+[proxy]
+# Address to listen for client connections
+listen = ":4404"
+
+# Maximum number of simultaneous client connections
+max_clients = 10
+
+[web]
+# Address to listen for the web dashboard
+listen = ":8080"
+
+# Enable or disable the web dashboard
+enabled = true
+
+[mdns]
+# Enable mDNS service advertisement (_meshtastic._tcp)
+# When enabled, iOS/Android Meshtastic apps will auto-discover this proxy
+# on the local network via Bonjour/mDNS, just like a real Meshtastic node.
+enabled = true
+
+# Instance name shown in mDNS service browsers
+instance = "Meshtastic Proxy"
+
+# Short name for the node (max 4 characters, sent as TXT record)
+# This is displayed in the Meshtastic app alongside the node ID
+short_name = "PRXY"
+
+# Node ID in hex format (sent as TXT record)
+# Example: "!deadbeef" — leave empty if not needed
+id = ""
+
+[logging]
+# Log level: debug, info, warn, error
+level = "info"
+
+# Log format: text, json
+format = "text"

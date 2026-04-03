@@ -1,0 +1,474 @@
+{{define "dashboard.html"}}
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Meshtastic Proxy Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        mono: ['JetBrains Mono', 'Fira Code', 'Cascadia Code', 'monospace'],
+                    },
+                },
+            },
+        }
+    </script>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen font-sans">
+    <div class="max-w-7xl mx-auto px-4 py-6 sm:px-6 lg:px-8">
+
+        <!-- Header -->
+        <header class="flex items-center gap-4 mb-6 pb-4 border-b border-gray-800">
+            <h1 class="text-xl font-semibold tracking-tight">Meshtastic TCP Proxy</h1>
+            <span id="node-badge" class="text-xs font-semibold px-3 py-1 rounded-full uppercase tracking-wider
+                {{if .Metrics.NodeConnected}}
+                    bg-emerald-500/15 text-emerald-400 border border-emerald-500/30
+                {{else}}
+                    bg-red-500/15 text-red-400 border border-red-500/30
+                {{end}}">
+                {{if .Metrics.NodeConnected}}Connected{{else}}Disconnected{{end}}
+            </span>
+            <div class="ml-auto flex items-center gap-2">
+                <span id="sse-indicator" class="w-2 h-2 rounded-full bg-gray-600" title="SSE disconnected"></span>
+                <span id="sse-label" class="text-xs text-gray-500">Connecting...</span>
+            </div>
+        </header>
+
+        <!-- Status Cards -->
+        <section class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-6">
+            <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 hover:border-indigo-500/50 transition-colors">
+                <div class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-1">Node</div>
+                <div id="card-node" class="text-lg font-bold font-mono truncate">{{.Metrics.NodeAddress}}</div>
+                <div id="card-node-status" class="text-sm text-gray-500 flex items-center gap-1">
+                    {{if .Metrics.NodeConnected}}
+                        <span class="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_6px] shadow-emerald-400 inline-block"></span> Connected
+                    {{else}}
+                        <span class="w-2 h-2 rounded-full bg-red-400 shadow-[0_0_6px] shadow-red-400 inline-block"></span> Disconnected
+                    {{end}}
+                </div>
+            </div>
+            <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 hover:border-indigo-500/50 transition-colors">
+                <div class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-1">Clients</div>
+                <div id="card-clients" class="text-lg font-bold font-mono">{{.Metrics.ActiveClients}}</div>
+                <div class="text-sm text-gray-500">Active connections</div>
+            </div>
+            <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 hover:border-indigo-500/50 transition-colors">
+                <div class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-1">Uptime</div>
+                <div id="card-uptime" class="text-lg font-bold font-mono">{{.Metrics.UptimeStr}}</div>
+                <div class="text-sm text-gray-500">Since proxy start</div>
+            </div>
+            <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 hover:border-indigo-500/50 transition-colors">
+                <div class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-1">From Node</div>
+                <div id="card-frames-in" class="text-lg font-bold font-mono">{{.Metrics.FramesFromNode}}</div>
+                <div id="card-bytes-in" class="text-sm text-gray-500">{{.Metrics.BytesFromNode}} bytes</div>
+            </div>
+            <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 hover:border-indigo-500/50 transition-colors">
+                <div class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-1">To Node</div>
+                <div id="card-frames-out" class="text-lg font-bold font-mono">{{.Metrics.FramesToNode}}</div>
+                <div id="card-bytes-out" class="text-sm text-gray-500">{{.Metrics.BytesToNode}} bytes</div>
+            </div>
+        </section>
+
+        <!-- Charts Row -->
+        <section class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+            <!-- Traffic Chart (2/3 width) -->
+            <div class="lg:col-span-2 bg-gray-900 border border-gray-800 rounded-xl p-4">
+                <h2 class="text-sm font-semibold mb-3">Traffic (frames/sec, last 5 min)</h2>
+                <div class="relative h-48">
+                    <canvas id="traffic-chart"></canvas>
+                </div>
+            </div>
+            <!-- Message Types Doughnut (1/3 width) -->
+            <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+                <h2 class="text-sm font-semibold mb-3">Message Types</h2>
+                <div class="relative h-48 flex items-center justify-center">
+                    <canvas id="types-chart"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- Connected Clients -->
+        <section id="clients-section" class="bg-gray-900 border border-gray-800 rounded-xl p-4 mb-6 {{if not .Clients}}hidden{{end}}">
+            <h2 class="text-sm font-semibold mb-3">Connected Clients</h2>
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead>
+                        <tr>
+                            <th class="text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">#</th>
+                            <th class="text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">Address</th>
+                        </tr>
+                    </thead>
+                    <tbody id="clients-tbody">
+                        {{range $i, $addr := .Clients}}
+                        <tr class="hover:bg-gray-800/50">
+                            <td class="px-3 py-2 border-b border-gray-800/50">{{$i}}</td>
+                            <td class="px-3 py-2 border-b border-gray-800/50"><code class="font-mono text-xs">{{$addr}}</code></td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Recent Messages -->
+        <section class="bg-gray-900 border border-gray-800 rounded-xl p-4 mb-6">
+            <div class="flex items-center justify-between mb-3">
+                <h2 class="text-sm font-semibold">Recent Messages</h2>
+                <span id="msg-count" class="text-xs text-gray-500">{{len .Metrics.Messages}} messages</span>
+            </div>
+            <div class="overflow-x-auto max-h-[500px] overflow-y-auto">
+                <table class="w-full text-sm">
+                    <thead class="sticky top-0 bg-gray-900">
+                        <tr>
+                            <th class="text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">Time</th>
+                            <th class="text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">Dir</th>
+                            <th class="text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">Type</th>
+                            <th class="text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">Port</th>
+                            <th class="text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">From</th>
+                            <th class="text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">To</th>
+                            <th class="text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">Size</th>
+                            <th class="text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">Payload</th>
+                        </tr>
+                    </thead>
+                    <tbody id="messages-tbody">
+                        {{range .Metrics.Messages}}
+                        <tr class="hover:bg-gray-800/50">
+                            <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap">
+                                <code class="font-mono text-xs">{{.Timestamp.Format "15:04:05.000"}}</code>
+                            </td>
+                            <td class="px-3 py-1.5 border-b border-gray-800/50">
+                                {{if eq .Direction "from_node"}}
+                                    <span class="inline-block text-[10px] font-bold px-2 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/30 font-mono uppercase">IN</span>
+                                {{else}}
+                                    <span class="inline-block text-[10px] font-bold px-2 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/30 font-mono uppercase">OUT</span>
+                                {{end}}
+                            </td>
+                            <td class="px-3 py-1.5 border-b border-gray-800/50">
+                                <code class="font-mono text-xs">{{.Type}}</code>
+                            </td>
+                            <td class="px-3 py-1.5 border-b border-gray-800/50">
+                                <code class="font-mono text-xs text-gray-400">{{.PortNum}}</code>
+                            </td>
+                            <td class="px-3 py-1.5 border-b border-gray-800/50">
+                                <code class="font-mono text-xs text-gray-400">{{nodeHex .From}}</code>
+                            </td>
+                            <td class="px-3 py-1.5 border-b border-gray-800/50">
+                                <code class="font-mono text-xs text-gray-400">{{nodeHex .To}}</code>
+                            </td>
+                            <td class="px-3 py-1.5 border-b border-gray-800/50 text-right tabular-nums">
+                                {{.Size}}B
+                            </td>
+                            <td class="px-3 py-1.5 border-b border-gray-800/50 max-w-xs truncate" title="{{.Payload}}">
+                                <span class="text-xs text-gray-300">{{.Payload}}</span>
+                            </td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Footer -->
+        <footer class="mt-8 pt-4 border-t border-gray-800 text-center text-xs text-gray-600">
+            Meshtastic TCP Proxy &mdash; real-time via SSE
+        </footer>
+    </div>
+
+    <!-- Initial data from server for charts -->
+    <script>
+        const initialTrafficSeries = {{json .Metrics.TrafficSeries}};
+        const initialTypeCounts = {{json .Metrics.MessageTypeCounts}};
+    </script>
+
+    <script>
+    (function() {
+        'use strict';
+
+        // ── Chart.js defaults for dark theme ──
+        Chart.defaults.color = '#6b7280';
+        Chart.defaults.borderColor = '#1f2937';
+
+        // ── Traffic Line Chart ──
+        const trafficCtx = document.getElementById('traffic-chart').getContext('2d');
+        const MAX_TRAFFIC_POINTS = 300;
+
+        const trafficData = {
+            labels: initialTrafficSeries.map(s => {
+                const d = new Date(s.ts);
+                return d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+            }),
+            datasets: [
+                {
+                    label: 'From Node',
+                    data: initialTrafficSeries.map(s => s.fi),
+                    borderColor: '#60a5fa',
+                    backgroundColor: 'rgba(96, 165, 250, 0.1)',
+                    fill: true,
+                    tension: 0.3,
+                    pointRadius: 0,
+                    borderWidth: 1.5,
+                },
+                {
+                    label: 'To Node',
+                    data: initialTrafficSeries.map(s => s.fo),
+                    borderColor: '#fbbf24',
+                    backgroundColor: 'rgba(251, 191, 36, 0.1)',
+                    fill: true,
+                    tension: 0.3,
+                    pointRadius: 0,
+                    borderWidth: 1.5,
+                },
+            ],
+        };
+
+        const trafficChart = new Chart(trafficCtx, {
+            type: 'line',
+            data: trafficData,
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { intersect: false, mode: 'index' },
+                scales: {
+                    x: {
+                        display: true,
+                        ticks: { maxTicksLimit: 8, font: { size: 10 } },
+                        grid: { color: '#1f2937' },
+                    },
+                    y: {
+                        display: true,
+                        beginAtZero: true,
+                        ticks: { font: { size: 10 }, precision: 0 },
+                        grid: { color: '#1f2937' },
+                    },
+                },
+                plugins: {
+                    legend: { position: 'top', labels: { boxWidth: 12, font: { size: 11 } } },
+                },
+                animation: { duration: 300 },
+            },
+        });
+
+        // ── Message Types Doughnut Chart ──
+        const typesCtx = document.getElementById('types-chart').getContext('2d');
+
+        const typeLabels = Object.keys(initialTypeCounts);
+        const typeValues = Object.values(initialTypeCounts);
+        const typeColors = generateColors(typeLabels.length);
+
+        const typesChart = new Chart(typesCtx, {
+            type: 'doughnut',
+            data: {
+                labels: typeLabels,
+                datasets: [{
+                    data: typeValues,
+                    backgroundColor: typeColors,
+                    borderWidth: 0,
+                }],
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'right',
+                        labels: { boxWidth: 10, font: { size: 10 }, padding: 8 },
+                    },
+                },
+                cutout: '60%',
+                animation: { duration: 300 },
+            },
+        });
+
+        function generateColors(n) {
+            const palette = [
+                '#60a5fa', '#f472b6', '#34d399', '#fbbf24', '#a78bfa',
+                '#fb923c', '#22d3ee', '#e879f9', '#4ade80', '#f87171',
+                '#818cf8', '#2dd4bf', '#facc15', '#c084fc', '#fb7185',
+            ];
+            const result = [];
+            for (let i = 0; i < n; i++) {
+                result.push(palette[i % palette.length]);
+            }
+            return result;
+        }
+
+        // ── SSE Connection ──
+        const sseIndicator = document.getElementById('sse-indicator');
+        const sseLabel = document.getElementById('sse-label');
+        let reconnectDelay = 1000;
+
+        function connectSSE() {
+            const evtSource = new EventSource('/api/events');
+
+            evtSource.onopen = function() {
+                sseIndicator.className = 'w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_6px] shadow-emerald-400';
+                sseLabel.textContent = 'Live';
+                sseLabel.className = 'text-xs text-emerald-400';
+                reconnectDelay = 1000;
+            };
+
+            evtSource.addEventListener('metrics', function(e) {
+                const snap = JSON.parse(e.data);
+                updateMetricsUI(snap);
+            });
+
+            evtSource.addEventListener('message', function(e) {
+                const msg = JSON.parse(e.data);
+                prependMessage(msg);
+            });
+
+            evtSource.onerror = function() {
+                sseIndicator.className = 'w-2 h-2 rounded-full bg-red-400';
+                sseLabel.textContent = 'Reconnecting...';
+                sseLabel.className = 'text-xs text-red-400';
+                evtSource.close();
+                setTimeout(connectSSE, reconnectDelay);
+                reconnectDelay = Math.min(reconnectDelay * 2, 30000);
+            };
+        }
+
+        // ── Update UI from metrics snapshot ──
+        function updateMetricsUI(snap) {
+            // Badge
+            const badge = document.getElementById('node-badge');
+            if (snap.node_connected) {
+                badge.textContent = 'Connected';
+                badge.className = 'text-xs font-semibold px-3 py-1 rounded-full uppercase tracking-wider bg-emerald-500/15 text-emerald-400 border border-emerald-500/30';
+            } else {
+                badge.textContent = 'Disconnected';
+                badge.className = 'text-xs font-semibold px-3 py-1 rounded-full uppercase tracking-wider bg-red-500/15 text-red-400 border border-red-500/30';
+            }
+
+            // Cards
+            document.getElementById('card-node').textContent = snap.node_address;
+            const statusEl = document.getElementById('card-node-status');
+            if (snap.node_connected) {
+                statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_6px] shadow-emerald-400 inline-block"></span> Connected';
+            } else {
+                statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-red-400 shadow-[0_0_6px] shadow-red-400 inline-block"></span> Disconnected';
+            }
+
+            document.getElementById('card-clients').textContent = snap.active_clients;
+            document.getElementById('card-uptime').textContent = snap.uptime_str;
+            document.getElementById('card-frames-in').textContent = snap.frames_from_node;
+            document.getElementById('card-bytes-in').textContent = snap.bytes_from_node + ' bytes';
+            document.getElementById('card-frames-out').textContent = snap.frames_to_node;
+            document.getElementById('card-bytes-out').textContent = snap.bytes_to_node + ' bytes';
+
+            // Traffic chart — append latest sample
+            if (snap.traffic_series && snap.traffic_series.length > 0) {
+                const latest = snap.traffic_series[snap.traffic_series.length - 1];
+                const d = new Date(latest.ts);
+                const label = d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+
+                trafficData.labels.push(label);
+                trafficData.datasets[0].data.push(latest.fi);
+                trafficData.datasets[1].data.push(latest.fo);
+
+                // Trim to max points
+                while (trafficData.labels.length > MAX_TRAFFIC_POINTS) {
+                    trafficData.labels.shift();
+                    trafficData.datasets[0].data.shift();
+                    trafficData.datasets[1].data.shift();
+                }
+
+                trafficChart.update('none');
+            }
+
+            // Message type doughnut — full rebuild
+            if (snap.message_type_counts) {
+                const labels = Object.keys(snap.message_type_counts);
+                const values = Object.values(snap.message_type_counts);
+                typesChart.data.labels = labels;
+                typesChart.data.datasets[0].data = values;
+                typesChart.data.datasets[0].backgroundColor = generateColors(labels.length);
+                typesChart.update('none');
+            }
+        }
+
+        // ── Prepend a new message row to the table ──
+        function prependMessage(msg) {
+            const tbody = document.getElementById('messages-tbody');
+            const tr = document.createElement('tr');
+            tr.className = 'hover:bg-gray-800/50 new-row';
+
+            const ts = new Date(msg.timestamp);
+            const timeStr = ts.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit', fractionalSecondDigits: 3});
+
+            const dirTag = msg.direction === 'from_node'
+                ? '<span class="inline-block text-[10px] font-bold px-2 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/30 font-mono uppercase">IN</span>'
+                : '<span class="inline-block text-[10px] font-bold px-2 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/30 font-mono uppercase">OUT</span>';
+
+            const fromHex = msg.from ? '!' + msg.from.toString(16).padStart(8, '0') : '';
+            const toHex = msg.to ? '!' + msg.to.toString(16).padStart(8, '0') : '';
+
+            tr.innerHTML = `
+                <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap"><code class="font-mono text-xs">${timeStr}</code></td>
+                <td class="px-3 py-1.5 border-b border-gray-800/50">${dirTag}</td>
+                <td class="px-3 py-1.5 border-b border-gray-800/50"><code class="font-mono text-xs">${esc(msg.type)}</code></td>
+                <td class="px-3 py-1.5 border-b border-gray-800/50"><code class="font-mono text-xs text-gray-400">${esc(msg.port_num)}</code></td>
+                <td class="px-3 py-1.5 border-b border-gray-800/50"><code class="font-mono text-xs text-gray-400">${esc(fromHex)}</code></td>
+                <td class="px-3 py-1.5 border-b border-gray-800/50"><code class="font-mono text-xs text-gray-400">${esc(toHex)}</code></td>
+                <td class="px-3 py-1.5 border-b border-gray-800/50 text-right tabular-nums">${msg.size}B</td>
+                <td class="px-3 py-1.5 border-b border-gray-800/50 max-w-xs truncate" title="${esc(msg.payload || '')}"><span class="text-xs text-gray-300">${esc(msg.payload || '')}</span></td>
+            `;
+
+            tbody.insertBefore(tr, tbody.firstChild);
+
+            // Limit rows to 200
+            while (tbody.children.length > 200) {
+                tbody.removeChild(tbody.lastChild);
+            }
+
+            // Update count
+            document.getElementById('msg-count').textContent = tbody.children.length + ' messages';
+        }
+
+        // ── Fetch client list periodically (not in SSE stream) ──
+        async function refreshClients() {
+            try {
+                const resp = await fetch('/api/clients');
+                const data = await resp.json();
+                const section = document.getElementById('clients-section');
+                const tbody = document.getElementById('clients-tbody');
+
+                if (data.clients && data.clients.length > 0) {
+                    section.classList.remove('hidden');
+                    tbody.innerHTML = data.clients.map((addr, i) =>
+                        `<tr class="hover:bg-gray-800/50">
+                            <td class="px-3 py-2 border-b border-gray-800/50">${i}</td>
+                            <td class="px-3 py-2 border-b border-gray-800/50"><code class="font-mono text-xs">${esc(addr)}</code></td>
+                        </tr>`
+                    ).join('');
+                } else {
+                    section.classList.add('hidden');
+                }
+            } catch (e) {
+                // Ignore fetch errors
+            }
+        }
+
+        // ── HTML escape utility ──
+        function esc(s) {
+            if (!s) return '';
+            const el = document.createElement('span');
+            el.textContent = s;
+            return el.innerHTML;
+        }
+
+        // ── Bootstrap ──
+        connectSSE();
+        setInterval(refreshClients, 5000);
+        refreshClients();
+    })();
+    </script>
+</body>
+</html>
+{{end}}

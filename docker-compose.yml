@@ -1,0 +1,12 @@
+services:
+  meshtastic-proxy:
+    build: .
+    container_name: meshtastic-proxy
+    restart: unless-stopped
+    ports:
+      - "4404:4404"   # Proxy TCP port for Meshtastic clients
+      - "8080:8080"   # Web dashboard
+    volumes:
+      - ./config.toml:/app/config.toml:ro
+    # Uncomment if the node is on the host network:
+    # network_mode: host

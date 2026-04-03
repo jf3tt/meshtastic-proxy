@@ -1,0 +1,37 @@
+/* Minimal custom styles — Tailwind handles the rest */
+
+/* Highlight animation for new SSE message rows */
+@keyframes row-flash {
+    from { background-color: rgba(99, 102, 241, 0.15); }
+    to   { background-color: transparent; }
+}
+.new-row {
+    animation: row-flash 1s ease-out;
+}
+
+/* Custom scrollbar for dark theme */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+::-webkit-scrollbar-thumb {
+    background: #374151;
+    border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: #4b5563;
+}
+
+/* Firefox scrollbar */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: #374151 transparent;
+}
+
+/* Tabular numbers for counters */
+.tabular-nums {
+    font-variant-numeric: tabular-nums;
+}
