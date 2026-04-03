@@ -42,7 +42,7 @@ func NewClient(conn net.Conn, logger *slog.Logger, m *metrics.Metrics, onMessage
 		addr:      conn.RemoteAddr().String(),
 		logger:    logger.With("client", conn.RemoteAddr().String()),
 		m:         m,
-		send:      make(chan []byte, 128),
+		send:      make(chan []byte, 256),
 		onMessage: onMessage,
 		onClose:   onClose,
 	}

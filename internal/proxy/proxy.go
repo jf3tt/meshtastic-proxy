@@ -115,21 +115,27 @@ func (p *Proxy) handleNewConnection(ctx context.Context, conn net.Conn) {
 		p.logger,
 		p.metrics,
 		func(payload []byte) {
-			// Log client-originated ToRadio frames for debugging
+			// Intercept client-originated ToRadio frames that must not
+			// reach the node: want_config_id (answered from cache) and
+			// disconnect (handled locally).
 			if msg, err := decodeToRadioType(payload); err == nil {
 				switch v := msg.GetPayloadVariant().(type) {
 				case *pb.ToRadio_WantConfigId:
-					p.logger.Debug("client sent want_config_id",
+					p.logger.Debug("client sent want_config_id, replying from cache",
 						"client", client.Addr(),
 						"nonce", v.WantConfigId,
 					)
+					go p.replayCachedConfig(client, v.WantConfigId)
+					return // do NOT forward to node
 				case *pb.ToRadio_Disconnect:
-					p.logger.Debug("client sent disconnect",
+					p.logger.Debug("client sent disconnect, closing client",
 						"client", client.Addr(),
 					)
+					client.Close()
+					return // do NOT forward to node
 				}
 			}
-			// Forward ToRadio from client to node
+			// Forward all other ToRadio frames to node
 			p.nodeConn.Send(payload)
 		},
 		func(c *Client) {
@@ -199,6 +205,53 @@ func (p *Proxy) sendCachedConfig(c *Client) {
 			return
 		}
 	}
+}
+
+// replayCachedConfig sends the cached node configuration to a client that
+// has requested it via want_config_id. The ConfigCompleteId nonce in the
+// cache is replaced with the client's nonce so the client accepts the
+// config sequence. This is called from the client's readLoop goroutine
+// (via onMessage), so the write loop is already running and frames are
+// delivered through the send channel.
+func (p *Proxy) replayCachedConfig(c *Client, clientNonce uint32) {
+	frames := p.nodeConn.ConfigCache()
+	if len(frames) == 0 {
+		p.logger.Debug("no cached config for replay", "client", c.Addr())
+		return
+	}
+
+	sent := 0
+	for _, frame := range frames {
+		// Check if this frame is ConfigCompleteId and replace the nonce
+		outFrame := frame
+		msg := &pb.FromRadio{}
+		if err := proto.Unmarshal(frame, msg); err == nil {
+			if _, ok := msg.GetPayloadVariant().(*pb.FromRadio_ConfigCompleteId); ok {
+				msg.PayloadVariant = &pb.FromRadio_ConfigCompleteId{
+					ConfigCompleteId: clientNonce,
+				}
+				if patched, err := proto.Marshal(msg); err == nil {
+					outFrame = patched
+				}
+			}
+		}
+
+		if !c.Send(outFrame) {
+			p.logger.Debug("replay interrupted, client disconnected",
+				"client", c.Addr(),
+				"sent", sent,
+				"total", len(frames),
+			)
+			return
+		}
+		sent++
+	}
+
+	p.logger.Debug("replayed cached config to client",
+		"client", c.Addr(),
+		"frames", sent,
+		"client_nonce", clientNonce,
+	)
 }
 
 // broadcastLoop reads frames from the node and broadcasts them to all clients.

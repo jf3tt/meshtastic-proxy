@@ -303,14 +303,14 @@ func TestSendBufferFullDisconnects(t *testing.T) {
 	)
 
 	// Do NOT call Start — writeLoop is not running.
-	// Fill the buffer (128 slots).
-	for i := 0; i < 128; i++ {
+	// Fill the buffer (256 slots).
+	for i := 0; i < 256; i++ {
 		if !client.Send([]byte{byte(i)}) {
 			t.Fatalf("Send returned false at frame %d before buffer full", i)
 		}
 	}
 
-	// The 129th send should fail — buffer full, no consumer.
+	// The 257th send should fail — buffer full, no consumer.
 	if client.Send([]byte{0xFF}) {
 		t.Fatal("Send should have returned false (buffer full)")
 	}
