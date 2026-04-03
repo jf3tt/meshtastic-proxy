@@ -67,6 +67,17 @@ client.Run(ctx)                 ← starts read/write loops; client sends want_c
 
 `replayCachedConfig` delivers frames through `client.Send()` (the channel-based write loop). It substitutes the `ConfigCompleteId` nonce with the client's nonce so the client accepts the config sequence. The send channel buffer (256) is large enough for 172 frames because the write loop is actively draining it.
 
+#### iOS Two-Phase Config (Special Nonces)
+
+The iOS Meshtastic app uses two sequential `want_config_id` requests with special nonces defined in firmware (`PhoneAPI.h`):
+
+| Nonce | Constant | Requests |
+|---|---|---|
+| `69420` | `SPECIAL_NONCE_ONLY_CONFIG` | Config only (MyInfo, Metadata, Channels, Config, ModuleConfig, own NodeInfo) — skips other nodes' NodeInfo |
+| `69421` | `SPECIAL_NONCE_ONLY_NODES` | NodeInfo DB only (all NodeInfo frames) — skips config |
+
+`filterConfigCache()` in `proxy.go` classifies cached frames and returns only the appropriate subset. For any other nonce (e.g. Python CLI with a random nonce), all frames are returned unfiltered.
+
 ### ToRadio Interception
 
 The proxy intercepts two `ToRadio` frame types from clients, preventing them from reaching the node:

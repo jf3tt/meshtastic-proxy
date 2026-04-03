@@ -13,6 +13,13 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// Special nonces used by the iOS Meshtastic app to request partial config.
+// See firmware PhoneAPI.h: SPECIAL_NONCE_ONLY_CONFIG / SPECIAL_NONCE_ONLY_NODES.
+const (
+	nonceOnlyConfig = 69420 // config + channels + modules, skip NodeInfo DB
+	nonceOnlyNodes  = 69421 // NodeInfo DB only, skip config
+)
+
 // Proxy is the main hub that accepts client connections and multiplexes
 // traffic between clients and the Meshtastic node.
 type Proxy struct {
@@ -187,8 +194,20 @@ func (p *Proxy) replayCachedConfig(c *Client, clientNonce uint32) {
 		return
 	}
 
+	// Filter frames based on special nonces (iOS two-phase config).
+	filtered := filterConfigCache(frames, clientNonce)
+
+	// Determine request type for logging.
+	reqType := "full"
+	switch clientNonce {
+	case nonceOnlyConfig:
+		reqType = "config_only"
+	case nonceOnlyNodes:
+		reqType = "nodes_only"
+	}
+
 	sent := 0
-	for _, frame := range frames {
+	for _, frame := range filtered {
 		// Check if this frame is ConfigCompleteId and replace the nonce
 		outFrame := frame
 		msg := &pb.FromRadio{}
@@ -207,7 +226,7 @@ func (p *Proxy) replayCachedConfig(c *Client, clientNonce uint32) {
 			p.logger.Debug("replay interrupted, client disconnected",
 				"client", c.Addr(),
 				"sent", sent,
-				"total", len(frames),
+				"total", len(filtered),
 			)
 			return
 		}
@@ -217,8 +236,81 @@ func (p *Proxy) replayCachedConfig(c *Client, clientNonce uint32) {
 	p.logger.Debug("replayed cached config to client",
 		"client", c.Addr(),
 		"frames", sent,
+		"total_cached", len(frames),
+		"type", reqType,
 		"client_nonce", clientNonce,
 	)
+}
+
+// filterConfigCache returns a subset of cached config frames based on the
+// client's nonce. The firmware (PhoneAPI.cpp) supports two special nonces:
+//   - nonceOnlyConfig (69420): config frames only, skip other nodes' NodeInfo
+//   - nonceOnlyNodes  (69421): NodeInfo frames only, skip config
+//
+// Any other nonce returns all frames unmodified (full config).
+// The ConfigCompleteId frame is always included.
+func filterConfigCache(frames [][]byte, nonce uint32) [][]byte {
+	if nonce != nonceOnlyConfig && nonce != nonceOnlyNodes {
+		return frames // full config for normal nonces
+	}
+
+	// Find my_node_num so we can identify own NodeInfo.
+	var myNodeNum uint32
+	for _, frame := range frames {
+		msg := &pb.FromRadio{}
+		if err := proto.Unmarshal(frame, msg); err != nil {
+			continue
+		}
+		if v, ok := msg.GetPayloadVariant().(*pb.FromRadio_MyInfo); ok {
+			myNodeNum = v.MyInfo.GetMyNodeNum()
+			break
+		}
+	}
+
+	result := make([][]byte, 0, len(frames))
+	for _, frame := range frames {
+		msg := &pb.FromRadio{}
+		if err := proto.Unmarshal(frame, msg); err != nil {
+			result = append(result, frame) // keep unparseable frames
+			continue
+		}
+
+		switch v := msg.GetPayloadVariant().(type) {
+		case *pb.FromRadio_ConfigCompleteId:
+			// Always included — nonce is patched later by replayCachedConfig.
+			result = append(result, frame)
+
+		case *pb.FromRadio_NodeInfo:
+			if nonce == nonceOnlyConfig {
+				// Config-only: include own NodeInfo, skip others.
+				if v.NodeInfo.GetNum() == myNodeNum {
+					result = append(result, frame)
+				}
+			} else {
+				// Nodes-only: include all NodeInfo.
+				result = append(result, frame)
+			}
+
+		case *pb.FromRadio_MyInfo,
+			*pb.FromRadio_DeviceuiConfig,
+			*pb.FromRadio_Metadata,
+			*pb.FromRadio_Channel,
+			*pb.FromRadio_Config,
+			*pb.FromRadio_ModuleConfig,
+			*pb.FromRadio_FileInfo:
+			// Config frames — include for config-only, skip for nodes-only.
+			if nonce == nonceOnlyConfig {
+				result = append(result, frame)
+			}
+
+		default:
+			// Unknown types: include for config-only (conservative).
+			if nonce == nonceOnlyConfig {
+				result = append(result, frame)
+			}
+		}
+	}
+	return result
 }
 
 // broadcastLoop reads frames from the node and broadcasts them to all clients.
