@@ -227,7 +227,10 @@ func (c *Connection) readLoop(ctx context.Context, conn net.Conn) error {
 				c.configCache = configFrames
 				c.configMu.Unlock()
 				collectingConfig = false
-				c.logger.Info("node config cached", "frames", len(configFrames))
+				c.logger.Info("node config cached",
+					"frames", len(configFrames),
+					"breakdown", countCacheFrameTypes(configFrames),
+				)
 			}
 		default:
 			if collectingConfig {
@@ -629,6 +632,41 @@ func decodeModuleConfig(cfg *pb.ModuleConfig) string {
 	default:
 		return "module: unknown"
 	}
+}
+
+// countCacheFrameTypes returns a count of each FromRadio frame type in the cache.
+func countCacheFrameTypes(frames [][]byte) map[string]int {
+	counts := make(map[string]int)
+	for _, frame := range frames {
+		msg := &pb.FromRadio{}
+		if err := proto.Unmarshal(frame, msg); err != nil {
+			counts["unparseable"]++
+			continue
+		}
+		switch msg.GetPayloadVariant().(type) {
+		case *pb.FromRadio_MyInfo:
+			counts["my_info"]++
+		case *pb.FromRadio_NodeInfo:
+			counts["node_info"]++
+		case *pb.FromRadio_Config:
+			counts["config"]++
+		case *pb.FromRadio_ModuleConfig:
+			counts["module_config"]++
+		case *pb.FromRadio_Channel:
+			counts["channel"]++
+		case *pb.FromRadio_ConfigCompleteId:
+			counts["config_complete_id"]++
+		case *pb.FromRadio_Metadata:
+			counts["metadata"]++
+		case *pb.FromRadio_DeviceuiConfig:
+			counts["deviceui_config"]++
+		case *pb.FromRadio_FileInfo:
+			counts["file_info"]++
+		default:
+			counts["other"]++
+		}
+	}
+	return counts
 }
 
 func copyBytes(b []byte) []byte {
