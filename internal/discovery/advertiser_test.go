@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -185,6 +186,12 @@ loop:
 	select {
 	case err := <-errCh:
 		if err != nil {
+			// In CI/container environments the host may have no resolvable IP
+			// addresses, causing mDNS service creation to fail. Treat this as a
+			// skipped test rather than a hard failure.
+			if strings.Contains(err.Error(), "could not determine host IP addresses") {
+				t.Skipf("skipping: mDNS unavailable in this environment: %v", err)
+			}
 			t.Fatalf("Run returned error: %v", err)
 		}
 	case <-time.After(2 * time.Second):
