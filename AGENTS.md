@@ -78,6 +78,20 @@ The iOS Meshtastic app uses two sequential `want_config_id` requests with specia
 
 `filterConfigCache()` in `proxy.go` classifies cached frames and returns only the appropriate subset. For any other nonce (e.g. Python CLI with a random nonce), all frames are returned unfiltered.
 
+#### iOS CoreData Timing Workaround (ownNodeInfoDelay)
+
+When replaying cached config for nonce `69420` (config-only phase), the proxy inserts a 50ms pause **after sending the connected node's own NodeInfo frame**. This is a workaround for a timing issue in the iOS Meshtastic app:
+
+1. iOS creates `NodeInfoEntity` in a CoreData **background context** when it receives the NodeInfo frame
+2. The SwiftUI views read from the **view context**, which merges changes asynchronously via `automaticallyMergesChangesFromParent`
+3. When the proxy delivers all cached frames instantly (no network latency like BLE), `ConfigCompleteId` arrives before the view context has merged the new `NodeInfoEntity`
+4. The app transitions to `.subscribed` state, SwiftUI re-renders, queries `getNodeInfo(id:context:)` on the view context — and gets `nil`
+5. `connectedNode == nil` causes the entire "Actions" section (including Trace Route) to disappear
+
+The 50ms delay gives the iOS main RunLoop time to process the CoreData merge notification before `ConfigCompleteId` triggers the UI refresh. This delay only applies to the iOS config-only phase (nonce `69420`) and only after the own NodeInfo frame — it does not affect nodes-only phase (`69421`) or full config replay (random nonce from Python CLI).
+
+See `ownNodeInfoDelay` constant and the delay logic in `replayCachedConfig()` in `internal/proxy/proxy.go`.
+
 ### ToRadio Interception
 
 The proxy intercepts two `ToRadio` frame types from clients, preventing them from reaching the node:

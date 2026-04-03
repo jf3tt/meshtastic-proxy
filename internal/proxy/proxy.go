@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"time"
 
 	pb "buf.build/gen/go/meshtastic/protobufs/protocolbuffers/go/meshtastic"
 	"github.com/jfett/meshtastic-proxy/internal/metrics"
@@ -18,6 +19,15 @@ const (
 	nonceOnlyConfig = 69420 // config + channels + modules, skip NodeInfo DB
 	nonceOnlyNodes  = 69421 // NodeInfo DB only, skip config
 )
+
+// ownNodeInfoDelay is a short pause inserted after sending the connected
+// node's own NodeInfo during config-only replay (nonce 69420). The iOS
+// Meshtastic app creates NodeInfoEntity in a CoreData background context;
+// this delay gives the main-thread viewContext time to merge the entity
+// before ConfigCompleteId triggers the UI refresh. Without it, the
+// SwiftUI view queries viewContext before the merge, connectedNode is nil,
+// and the Actions section disappears.
+const ownNodeInfoDelay = 50 * time.Millisecond
 
 // NodeConnection defines the interface for the node connection used by Proxy.
 // This allows substituting a mock in tests.
@@ -257,6 +267,20 @@ func (p *Proxy) replayCachedConfig(c *Client, clientNonce uint32) {
 			return
 		}
 		sent++
+
+		// After sending the connected node's own NodeInfo during config-only
+		// replay, pause briefly so the iOS app's CoreData viewContext can merge
+		// the newly created NodeInfoEntity before ConfigCompleteId arrives.
+		if clientNonce == nonceOnlyConfig {
+			if ni, ok := msg.GetPayloadVariant().(*pb.FromRadio_NodeInfo); ok &&
+				ni.NodeInfo.GetNum() == result.Stats.MyNodeNum {
+				p.logger.Debug("pausing after own NodeInfo for CoreData sync",
+					"client", c.Addr(),
+					"delay", ownNodeInfoDelay,
+				)
+				time.Sleep(ownNodeInfoDelay)
+			}
+		}
 	}
 
 	p.logger.Debug("replayed cached config to client",
