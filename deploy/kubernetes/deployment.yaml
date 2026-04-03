@@ -54,13 +54,15 @@ spec:
               cpu: 100m
               memory: 64Mi
           livenessProbe:
-            tcpSocket:
-              port: proxy
+            httpGet:
+              path: /
+              port: web
             initialDelaySeconds: 5
             periodSeconds: 30
           readinessProbe:
-            tcpSocket:
-              port: proxy
+            httpGet:
+              path: /
+              port: web
             initialDelaySeconds: 2
             periodSeconds: 10
       volumes:

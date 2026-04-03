@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"embed"
 	"encoding/json"
@@ -103,10 +104,16 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		Clients: s.clientsFn(),
 	}
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := s.templates.ExecuteTemplate(w, "dashboard.html", data); err != nil {
+	var buf bytes.Buffer
+	if err := s.templates.ExecuteTemplate(&buf, "dashboard.html", data); err != nil {
 		s.logger.Error("template render error", "error", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if _, err := buf.WriteTo(w); err != nil {
+		s.logger.Debug("dashboard write error", "error", err)
 	}
 }
 

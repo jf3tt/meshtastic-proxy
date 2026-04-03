@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: meshtastic-proxy-web
+  namespace: meshtastic
+  labels:
+    app.kubernetes.io/name: meshtastic-proxy
+    app.kubernetes.io/component: web
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: meshtastic-proxy
+  ports:
+    - name: http
+      port: 8090
+      targetPort: web
+      protocol: TCP
