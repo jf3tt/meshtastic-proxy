@@ -140,7 +140,7 @@ func TestRunAndShutdown(t *testing.T) {
 			Timeout: 2 * time.Second,
 			Entries: entriesCh,
 		}
-		mdns.Query(params)
+		_ = mdns.Query(params)
 	}()
 
 	timer := time.NewTimer(3 * time.Second)

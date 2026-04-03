@@ -1,4 +1,4 @@
-.PHONY: build run test lint clean docker docker-up docker-down tidy setup
+.PHONY: build run test lint clean docker docker-up docker-down tidy setup install-hooks
 
 BINARY := meshtastic-proxy
 BUILD_DIR := ./bin
@@ -12,6 +12,12 @@ GO := $(shell \
 	else echo go; \
 	fi)
 
+# Auto-detect golangci-lint binary
+GOLANGCI_LINT := $(shell \
+	if command -v golangci-lint >/dev/null 2>&1; then echo golangci-lint; \
+	elif [ -x "$(HOME)/go/bin/golangci-lint" ]; then echo "$(HOME)/go/bin/golangci-lint"; \
+	fi)
+
 build:
 	$(GO) build -o $(BUILD_DIR)/$(BINARY) ./cmd/meshtastic-proxy
 
@@ -23,6 +29,11 @@ test:
 
 lint:
 	$(GO) vet ./...
+ifdef GOLANGCI_LINT
+	GOROOT=$(shell $(GO) env GOROOT) PATH=$(shell dirname $(shell which $(GO) 2>/dev/null || echo $(GO))):$$PATH $(GOLANGCI_LINT) run --timeout=5m
+else
+	@echo "golangci-lint not installed, skipping (https://golangci-lint.run/usage/install/)"
+endif
 
 clean:
 	rm -rf $(BUILD_DIR)
@@ -50,3 +61,8 @@ setup:
 	else \
 		echo "Go 1.23+ already available: $$($(GO) version)"; \
 	fi
+
+# Install git pre-commit hook (runs vet + test + lint before each commit)
+install-hooks:
+	git config core.hooksPath .githooks
+	@echo "Git hooks installed from .githooks/"

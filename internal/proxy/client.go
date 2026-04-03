@@ -138,7 +138,7 @@ func (c *Client) writeLoop(ctx context.Context) {
 func (c *Client) Close() {
 	c.closeOnce.Do(func() {
 		c.logger.Debug("closing client connection")
-		c.conn.Close()
+		_ = c.conn.Close()
 		if c.onClose != nil {
 			c.onClose(c)
 		}

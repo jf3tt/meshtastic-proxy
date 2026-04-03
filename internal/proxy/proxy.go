@@ -48,14 +48,14 @@ func (p *Proxy) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listening on %s: %w", p.listenAddr, err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	p.logger.Info("proxy listening for clients", "address", p.listenAddr)
 
 	// Accept connections in a loop
 	go func() {
 		<-ctx.Done()
-		listener.Close()
+		_ = listener.Close()
 	}()
 
 	for {
@@ -101,7 +101,7 @@ func (p *Proxy) handleNewConnection(ctx context.Context, conn net.Conn) {
 			"client", conn.RemoteAddr(),
 			"max", p.maxClients,
 		)
-		conn.Close()
+		_ = conn.Close()
 		return
 	}
 

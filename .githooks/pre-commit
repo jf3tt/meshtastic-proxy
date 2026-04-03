@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Pre-commit hook for meshtastic-proxy
+# Install with: make install-hooks
+set -e
+
+# Auto-detect Go 1.23+ binary (mirrors Makefile logic)
+if go version 2>/dev/null | grep -qE 'go1\.(2[3-9]|[3-9][0-9])'; then
+    GO=go
+elif command -v go1.23.0 &>/dev/null; then
+    GO=go1.23.0
+elif [ -x "${HOME}/sdk/go1.23.0/bin/go" ]; then
+    GO="${HOME}/sdk/go1.23.0/bin/go"
+elif [ -x "${HOME}/go/bin/go1.23.0" ]; then
+    GO="${HOME}/go/bin/go1.23.0"
+else
+    GO=go
+fi
+
+# Auto-detect golangci-lint
+if command -v golangci-lint &>/dev/null; then
+    LINT=golangci-lint
+elif [ -x "${HOME}/go/bin/golangci-lint" ]; then
+    LINT="${HOME}/go/bin/golangci-lint"
+else
+    LINT=""
+fi
+
+echo "==> go vet..."
+$GO vet ./...
+
+echo "==> go test -race..."
+$GO test -race ./...
+
+if [ -n "$LINT" ]; then
+    echo "==> golangci-lint..."
+    $LINT run --timeout=5m
+else
+    echo "==> golangci-lint not installed, skipping (https://golangci-lint.run/usage/install/)"
+fi
+
+echo "==> All pre-commit checks passed"

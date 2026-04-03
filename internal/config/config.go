@@ -69,7 +69,7 @@ func (d *Duration) UnmarshalText(text []byte) error {
 
 // MarshalText returns the duration as a string.
 func (d Duration) MarshalText() ([]byte, error) {
-	return []byte(d.Duration.String()), nil
+	return []byte(d.String()), nil
 }
 
 // DefaultConfig returns a configuration with sensible defaults.

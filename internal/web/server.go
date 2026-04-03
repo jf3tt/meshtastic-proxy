@@ -72,7 +72,9 @@ func (s *Server) Run(ctx context.Context) error {
 
 	go func() {
 		<-ctx.Done()
-		srv.Shutdown(context.Background())
+		if err := srv.Shutdown(context.Background()); err != nil {
+			s.logger.Error("http server shutdown error", "error", err)
+		}
 	}()
 
 	s.logger.Info("web dashboard listening", "address", s.listenAddr)
@@ -111,16 +113,20 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAPIMetrics(w http.ResponseWriter, r *http.Request) {
 	snap := s.metrics.Snapshot()
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(snap)
+	if err := json.NewEncoder(w).Encode(snap); err != nil {
+		s.logger.Error("failed to encode metrics response", "error", err)
+	}
 }
 
 func (s *Server) handleAPIClients(w http.ResponseWriter, r *http.Request) {
 	clients := s.clientsFn()
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"clients": clients,
 		"count":   len(clients),
-	})
+	}); err != nil {
+		s.logger.Error("failed to encode clients response", "error", err)
+	}
 }
 
 // handleSSE streams Server-Sent Events to the browser.
@@ -144,7 +150,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	// Send initial snapshot so the client has data immediately
 	snap := s.metrics.Snapshot()
 	snapJSON, _ := json.Marshal(snap)
-	fmt.Fprintf(w, "event: metrics\ndata: %s\n\n", snapJSON)
+	_, _ = fmt.Fprintf(w, "event: metrics\ndata: %s\n\n", snapJSON)
 	flusher.Flush()
 
 	for {
@@ -161,7 +167,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", evt.Type, data)
+			_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", evt.Type, data)
 			flusher.Flush()
 		}
 	}
