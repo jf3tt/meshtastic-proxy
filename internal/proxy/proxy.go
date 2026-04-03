@@ -7,8 +7,10 @@ import (
 	"net"
 	"sync"
 
+	pb "buf.build/gen/go/meshtastic/protobufs/protocolbuffers/go/meshtastic"
 	"github.com/jfett/meshtastic-proxy/internal/metrics"
 	"github.com/jfett/meshtastic-proxy/internal/node"
+	"google.golang.org/protobuf/proto"
 )
 
 // Proxy is the main hub that accepts client connections and multiplexes
@@ -105,12 +107,28 @@ func (p *Proxy) handleNewConnection(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	// Create client with callbacks
-	client := NewClient(
+	// Create client with callbacks.
+	// Declare client first so the onMessage closure can reference it.
+	var client *Client
+	client = NewClient(
 		conn,
 		p.logger,
 		p.metrics,
 		func(payload []byte) {
+			// Log client-originated ToRadio frames for debugging
+			if msg, err := decodeToRadioType(payload); err == nil {
+				switch v := msg.GetPayloadVariant().(type) {
+				case *pb.ToRadio_WantConfigId:
+					p.logger.Debug("client sent want_config_id",
+						"client", client.Addr(),
+						"nonce", v.WantConfigId,
+					)
+				case *pb.ToRadio_Disconnect:
+					p.logger.Debug("client sent disconnect",
+						"client", client.Addr(),
+					)
+				}
+			}
 			// Forward ToRadio from client to node
 			p.nodeConn.Send(payload)
 		},
@@ -159,7 +177,22 @@ func (p *Proxy) sendCachedConfig(c *Client) {
 		return
 	}
 
-	p.logger.Debug("sending cached config to client", "client", c.Addr(), "frames", len(frames))
+	// Extract nonce from ConfigCompleteId for diagnostic logging
+	var configNonce uint32
+	for _, frame := range frames {
+		msg := &pb.FromRadio{}
+		if err := proto.Unmarshal(frame, msg); err == nil {
+			if v, ok := msg.GetPayloadVariant().(*pb.FromRadio_ConfigCompleteId); ok {
+				configNonce = v.ConfigCompleteId
+			}
+		}
+	}
+
+	p.logger.Debug("sending cached config to client",
+		"client", c.Addr(),
+		"frames", len(frames),
+		"config_complete_nonce", configNonce,
+	)
 	for _, frame := range frames {
 		if err := c.WriteDirect(frame); err != nil {
 			p.logger.Debug("failed to send cached config frame", "client", c.Addr(), "error", err)
@@ -175,6 +208,20 @@ func (p *Proxy) broadcastLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case payload := <-p.nodeConn.FromNode():
+			// Log config-related frames for debugging multi-client issues
+			msg := &pb.FromRadio{}
+			if err := proto.Unmarshal(payload, msg); err == nil {
+				switch v := msg.GetPayloadVariant().(type) {
+				case *pb.FromRadio_MyInfo:
+					p.logger.Debug("broadcasting my_info from node",
+						"node_num", v.MyInfo.GetMyNodeNum(),
+					)
+				case *pb.FromRadio_ConfigCompleteId:
+					p.logger.Debug("broadcasting config_complete_id from node",
+						"nonce", v.ConfigCompleteId,
+					)
+				}
+			}
 			p.broadcast(payload)
 		}
 	}
@@ -190,4 +237,10 @@ func (p *Proxy) broadcast(payload []byte) {
 		copy(cp, payload)
 		c.Send(cp)
 	}
+}
+
+// decodeToRadioType unmarshals a ToRadio protobuf for type inspection.
+func decodeToRadioType(payload []byte) (*pb.ToRadio, error) {
+	msg := &pb.ToRadio{}
+	return msg, proto.Unmarshal(payload, msg)
 }
