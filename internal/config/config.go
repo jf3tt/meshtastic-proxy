@@ -46,10 +46,11 @@ type LoggingConfig struct {
 // When enabled, the proxy advertises itself as a _meshtastic._tcp service
 // so that iOS/Android apps can discover it via Bonjour/mDNS.
 type MDNSConfig struct {
-	Enabled   bool   `toml:"enabled"`    // enable mDNS advertisement
-	Instance  string `toml:"instance"`   // mDNS instance name (e.g. "Meshtastic Proxy")
-	ShortName string `toml:"short_name"` // TXT record: node short name (4 chars)
-	ID        string `toml:"id"`         // TXT record: node ID (e.g. "!deadbeef")
+	Enabled    bool     `toml:"enabled"`    // enable mDNS advertisement
+	Instance   string   `toml:"instance"`   // mDNS instance name (e.g. "Meshtastic Proxy")
+	ShortName  string   `toml:"short_name"` // TXT record: node short name (4 chars)
+	ID         string   `toml:"id"`         // TXT record: node ID (e.g. "!deadbeef")
+	Interfaces []string `toml:"interfaces"` // network interfaces to advertise on (e.g. ["eth0"]); empty = auto-detect
 }
 
 // Duration is a wrapper around time.Duration that supports TOML string parsing.
@@ -143,6 +144,11 @@ func (c *Config) Validate() error {
 		}
 		if len(c.MDNS.ShortName) > 4 {
 			return fmt.Errorf("mdns.short_name must be at most 4 characters")
+		}
+		for i, iface := range c.MDNS.Interfaces {
+			if iface == "" {
+				return fmt.Errorf("mdns.interfaces[%d] must not be empty", i)
+			}
 		}
 	}
 	return nil

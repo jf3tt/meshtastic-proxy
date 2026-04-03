@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: meshtastic-proxy
+  namespace: meshtastic
+  labels:
+    app.kubernetes.io/name: meshtastic-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: meshtastic-proxy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: meshtastic-proxy
+    spec:
+      # hostNetwork is required for mDNS multicast to reach the home LAN.
+      # The pod shares the host's network stack and can send/receive multicast
+      # on physical interfaces (eth0, wlan0, etc.).
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+
+      # Uncomment to pin the proxy to a specific node:
+      # nodeSelector:
+      #   kubernetes.io/hostname: my-node
+
+      containers:
+        - name: meshtastic-proxy
+          image: ghcr.io/jf3tt/meshtastic-proxy:latest
+          imagePullPolicy: Always
+          args:
+            - -config
+            - /etc/meshtastic-proxy/config.toml
+          ports:
+            - name: proxy
+              containerPort: 4404
+              protocol: TCP
+            - name: web
+              containerPort: 8090
+              protocol: TCP
+            - name: mdns
+              containerPort: 5353
+              protocol: UDP
+          volumeMounts:
+            - name: config
+              mountPath: /etc/meshtastic-proxy
+              readOnly: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          livenessProbe:
+            tcpSocket:
+              port: proxy
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          readinessProbe:
+            tcpSocket:
+              port: proxy
+            initialDelaySeconds: 2
+            periodSeconds: 10
+      volumes:
+        - name: config
+          configMap:
+            name: meshtastic-proxy

@@ -41,6 +41,12 @@ short_name = "PRXY"
 # Example: "!deadbeef" — leave empty if not needed
 id = ""
 
+# Network interfaces to advertise mDNS on.
+# Useful with hostNetwork in Kubernetes to target only the home LAN interface
+# and avoid advertising on CNI/overlay interfaces (cni0, flannel.1, etc.).
+# When empty, the system default multicast interface is used (original behaviour).
+# interfaces = ["eth0"]
+
 [logging]
 # Log level: debug, info, warn, error
 level = "info"

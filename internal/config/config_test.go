@@ -33,6 +33,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.MDNS.ShortName != "PRXY" {
 		t.Fatalf("unexpected default mdns short_name: %s", cfg.MDNS.ShortName)
 	}
+	if len(cfg.MDNS.Interfaces) != 0 {
+		t.Fatalf("expected empty default mdns interfaces, got: %v", cfg.MDNS.Interfaces)
+	}
 	if cfg.Node.ReconnectInterval.Duration != time.Second {
 		t.Fatalf("unexpected default reconnect interval: %v", cfg.Node.ReconnectInterval.Duration)
 	}
@@ -62,6 +65,7 @@ enabled = true
 instance = "My Node"
 short_name = "TEST"
 id = "!aabbccdd"
+interfaces = ["eth0", "wlan0"]
 
 [logging]
 level = "debug"
@@ -114,6 +118,9 @@ format = "json"
 	}
 	if cfg.MDNS.ID != "!aabbccdd" {
 		t.Fatalf("unexpected mdns id: %s", cfg.MDNS.ID)
+	}
+	if len(cfg.MDNS.Interfaces) != 2 || cfg.MDNS.Interfaces[0] != "eth0" || cfg.MDNS.Interfaces[1] != "wlan0" {
+		t.Fatalf("unexpected mdns interfaces: %v", cfg.MDNS.Interfaces)
 	}
 	if cfg.Logging.Level != "debug" {
 		t.Fatalf("unexpected log level: %s", cfg.Logging.Level)
@@ -177,6 +184,27 @@ func TestValidation(t *testing.T) {
 			modify: func(c *Config) {
 				c.MDNS.Enabled = false
 				c.MDNS.Instance = "" // would fail if enabled
+			},
+			wantErr: false,
+		},
+		{
+			name: "mdns empty interface name",
+			modify: func(c *Config) {
+				c.MDNS.Interfaces = []string{"eth0", ""}
+			},
+			wantErr: true,
+		},
+		{
+			name: "mdns valid interfaces",
+			modify: func(c *Config) {
+				c.MDNS.Interfaces = []string{"eth0", "wlan0"}
+			},
+			wantErr: false,
+		},
+		{
+			name: "mdns empty interfaces list",
+			modify: func(c *Config) {
+				c.MDNS.Interfaces = []string{}
 			},
 			wantErr: false,
 		},
