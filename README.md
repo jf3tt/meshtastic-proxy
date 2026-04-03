@@ -2,6 +2,8 @@
 
 A TCP proxy for [Meshtastic](https://meshtastic.org/) LoRa mesh radio nodes. Connects to a single Meshtastic node over TCP and multiplexes the connection across multiple clients (iOS/Android Meshtastic app, Python CLI, etc.).
 
+![Web Dashboard](screenshots/image.png)
+
 ## Features
 
 - **Multi-client multiplexing** — multiple apps connect simultaneously to one radio node
