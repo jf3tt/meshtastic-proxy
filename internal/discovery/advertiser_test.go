@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -188,47 +189,65 @@ func TestRunAndShutdownDefault(t *testing.T) {
 	// Verify the service is discoverable via mDNS lookup.
 	// This may not work in CI/containers without multicast support,
 	// so we only log a warning instead of failing.
+	//
+	// We collect entries via a goroutine and wait for it to finish before
+	// inspecting the results.  This avoids a data race inside the
+	// hashicorp/mdns client which mutates internal state after sending
+	// entries to the channel.
 	entriesCh := make(chan *mdns.ServiceEntry, 4)
-	found := false
+	var collected []*mdns.ServiceEntry
+	var queryWg sync.WaitGroup
 
+	queryWg.Add(1)
 	go func() {
+		defer queryWg.Done()
 		params := &mdns.QueryParam{
 			Service: "_meshtastic._tcp",
 			Timeout: 2 * time.Second,
 			Entries: entriesCh,
 		}
 		_ = mdns.Query(params)
+		close(entriesCh)
 	}()
 
-	timer := time.NewTimer(3 * time.Second)
-	defer timer.Stop()
-
-loop:
-	for {
-		select {
-		case entry := <-entriesCh:
-			if entry != nil && entry.Port == 4404 {
-				found = true
-				hasPioEnv := false
-				hasShortname := false
-				for _, txt := range entry.InfoFields {
-					if txt == "pio_env=proxy" {
-						hasPioEnv = true
-					}
-					if txt == "shortname=TEST" {
-						hasShortname = true
-					}
-				}
-				if !hasPioEnv {
-					t.Error("missing pio_env=proxy TXT record")
-				}
-				if !hasShortname {
-					t.Error("missing shortname=TEST TXT record")
-				}
-				break loop
+	// Drain entries from the channel into a slice.
+	var drainWg sync.WaitGroup
+	drainWg.Add(1)
+	go func() {
+		defer drainWg.Done()
+		for entry := range entriesCh {
+			if entry != nil {
+				collected = append(collected, entry)
 			}
-		case <-timer.C:
-			break loop
+		}
+	}()
+
+	// Wait for Query to return (respects its own Timeout) and drain to finish.
+	queryWg.Wait()
+	drainWg.Wait()
+
+	// Now it is safe to inspect collected entries — no concurrent writes.
+	found := false
+	for _, entry := range collected {
+		if entry.Port == 4404 {
+			found = true
+			hasPioEnv := false
+			hasShortname := false
+			for _, txt := range entry.InfoFields {
+				if txt == "pio_env=proxy" {
+					hasPioEnv = true
+				}
+				if txt == "shortname=TEST" {
+					hasShortname = true
+				}
+			}
+			if !hasPioEnv {
+				t.Error("missing pio_env=proxy TXT record")
+			}
+			if !hasShortname {
+				t.Error("missing shortname=TEST TXT record")
+			}
+			break
 		}
 	}
 
@@ -281,9 +300,9 @@ func TestRunWithInterface(t *testing.T) {
 	// Give the mDNS server time to start
 	time.Sleep(200 * time.Millisecond)
 
-	// Verify that servers slice was populated.
-	if len(adv.servers) != 1 {
-		t.Fatalf("expected 1 server, got %d", len(adv.servers))
+	// Verify that servers were started (thread-safe accessor).
+	if n := adv.ServerCount(); n != 1 {
+		t.Fatalf("expected 1 server, got %d", n)
 	}
 
 	cancel()
@@ -301,8 +320,8 @@ func TestRunWithInterface(t *testing.T) {
 	}
 
 	// After shutdown, servers should be cleared.
-	if len(adv.servers) != 0 {
-		t.Fatalf("expected 0 servers after shutdown, got %d", len(adv.servers))
+	if n := adv.ServerCount(); n != 0 {
+		t.Fatalf("expected 0 servers after shutdown, got %d", n)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"strconv"
+	"sync"
 
 	"github.com/hashicorp/mdns"
 
@@ -23,6 +24,7 @@ type Advertiser struct {
 	cfg     config.MDNSConfig
 	port    int
 	logger  *slog.Logger
+	mu      sync.Mutex
 	servers []*mdns.Server
 }
 
@@ -151,10 +153,12 @@ func (a *Advertiser) startServer(iface *net.Interface) (*mdns.Server, error) {
 // auto-detected settings is used (original behaviour).
 // On context cancellation all servers are shut down gracefully.
 func (a *Advertiser) Run(ctx context.Context) error {
+	a.mu.Lock()
 	if len(a.cfg.Interfaces) == 0 {
 		// No explicit interfaces — single server with auto-detect (backward compatible).
 		server, err := a.startServer(nil)
 		if err != nil {
+			a.mu.Unlock()
 			return err
 		}
 		a.servers = []*mdns.Server{server}
@@ -163,29 +167,44 @@ func (a *Advertiser) Run(ctx context.Context) error {
 		for _, name := range a.cfg.Interfaces {
 			iface, err := net.InterfaceByName(name)
 			if err != nil {
+				a.shutdownLocked()
+				a.mu.Unlock()
 				return fmt.Errorf("looking up interface %q: %w", name, err)
 			}
 			server, err := a.startServer(iface)
 			if err != nil {
 				// Shut down any servers we already started.
-				a.shutdownAll()
+				a.shutdownLocked()
+				a.mu.Unlock()
 				return err
 			}
 			a.servers = append(a.servers, server)
 		}
 	}
+	a.mu.Unlock()
 
 	// Block until context is cancelled.
 	<-ctx.Done()
 
 	a.logger.Info("stopping mDNS advertisement")
-	a.shutdownAll()
+	a.mu.Lock()
+	a.shutdownLocked()
+	a.mu.Unlock()
 
 	return nil
 }
 
-// shutdownAll gracefully shuts down all running mDNS servers.
-func (a *Advertiser) shutdownAll() {
+// ServerCount returns the number of running mDNS servers.
+// Safe for concurrent use.
+func (a *Advertiser) ServerCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.servers)
+}
+
+// shutdownLocked gracefully shuts down all running mDNS servers.
+// The caller must hold a.mu.
+func (a *Advertiser) shutdownLocked() {
 	for _, s := range a.servers {
 		if err := s.Shutdown(); err != nil {
 			a.logger.Warn("error shutting down mDNS server", "error", err)
