@@ -55,15 +55,28 @@ Meshtastic TCP uses a 4-byte frame header: `[0x94] [0xC3] [len_hi] [len_lo]` fol
 
 ### Cached Config Replay
 
-When a new client connects, the proxy replays the cached node configuration (MyInfo, Config, ModuleConfig, Channel, NodeInfo, ConfigCompleteId — up to 172+ frames). This uses `Client.WriteDirect()` which writes directly to the TCP connection **before** starting the read/write loops (`Client.Run()`). This avoids the send channel (buffer size 128) and prevents "slow consumer" disconnects.
+The proxy caches the full node configuration (MyInfo, Config, ModuleConfig, Channel, NodeInfo, ConfigCompleteId — up to 172+ frames) when it first connects to the node. Config is delivered to clients **on demand**: the proxy waits for the client to send `want_config_id` (which all standard Meshtastic clients do after TCP connect), then replies from cache via `replayCachedConfig`.
 
-**Call order in `proxy.handleNewConnection`:**
+**Client connection flow in `proxy.handleNewConnection`:**
 ```
-sendCachedConfig(client)  → WriteDirect (bypasses channel, writes to conn)
-client.Run(ctx)           → Start() + Wait() (channel-based write loop for live traffic)
+client = NewClient(conn, ...)   ← onMessage callback intercepts want_config_id & disconnect
+registerClient(client)
+client.Run(ctx)                 ← starts read/write loops; client sends want_config_id
+                                ← onMessage intercepts it → replayCachedConfig(client, nonce)
 ```
 
-Do NOT change this order. Do NOT use `client.Send()` for cached config — the channel will overflow.
+`replayCachedConfig` delivers frames through `client.Send()` (the channel-based write loop). It substitutes the `ConfigCompleteId` nonce with the client's nonce so the client accepts the config sequence. The send channel buffer (256) is large enough for 172 frames because the write loop is actively draining it.
+
+### ToRadio Interception
+
+The proxy intercepts two `ToRadio` frame types from clients, preventing them from reaching the node:
+
+| Frame | Action | Reason |
+|---|---|---|
+| `want_config_id` | Reply from cache via `replayCachedConfig` | Prevents node config re-request that would corrupt cache and blast config to all clients |
+| `disconnect` | Close client locally via `client.Close()` | Prevents client disconnect from tearing down the shared node connection |
+
+All other `ToRadio` frames are forwarded to the node as-is.
 
 ### mDNS Multi-Interface
 

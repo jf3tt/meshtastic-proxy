@@ -129,9 +129,8 @@ func TestClientStartWait(t *testing.T) {
 	}
 }
 
-// TestWriteDirectCachedConfig is the core regression test for the
-// "slow consumer" bug. It verifies that WriteDirect can deliver more
-// frames than the send channel buffer (128) because it writes directly
+// TestWriteDirectCachedConfig verifies that WriteDirect can deliver more
+// frames than the send channel buffer (256) because it writes directly
 // to the underlying connection, bypassing the channel entirely.
 func TestWriteDirectCachedConfig(t *testing.T) {
 	client, serverConn, _ := newTestClient(t)

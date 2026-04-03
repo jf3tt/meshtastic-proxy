@@ -146,14 +146,12 @@ func (p *Proxy) handleNewConnection(ctx context.Context, conn net.Conn) {
 
 	p.registerClient(client)
 
-	// Send cached config directly to the connection before starting the
-	// read/write loops. WriteDirect bypasses the send channel, so there
-	// is no risk of a "slow consumer" disconnect regardless of cache size.
-	// Once the loops start, subsequent frames flow through the channel.
-	go func() {
-		p.sendCachedConfig(client)
-		client.Run(ctx)
-	}()
+	// Start the client read/write loops immediately. Config delivery
+	// is deferred until the client sends want_config_id (which all
+	// standard Meshtastic clients do after TCP connect). The onMessage
+	// callback above intercepts that request and replies from cache
+	// with the client's nonce via replayCachedConfig.
+	go client.Run(ctx)
 }
 
 func (p *Proxy) registerClient(c *Client) {
@@ -174,37 +172,6 @@ func (p *Proxy) unregisterClient(c *Client) {
 
 	p.metrics.ActiveClients.Store(int64(count))
 	p.logger.Info("client disconnected", "client", c.Addr(), "total_clients", count)
-}
-
-func (p *Proxy) sendCachedConfig(c *Client) {
-	frames := p.nodeConn.ConfigCache()
-	if len(frames) == 0 {
-		p.logger.Debug("no cached config to send", "client", c.Addr())
-		return
-	}
-
-	// Extract nonce from ConfigCompleteId for diagnostic logging
-	var configNonce uint32
-	for _, frame := range frames {
-		msg := &pb.FromRadio{}
-		if err := proto.Unmarshal(frame, msg); err == nil {
-			if v, ok := msg.GetPayloadVariant().(*pb.FromRadio_ConfigCompleteId); ok {
-				configNonce = v.ConfigCompleteId
-			}
-		}
-	}
-
-	p.logger.Debug("sending cached config to client",
-		"client", c.Addr(),
-		"frames", len(frames),
-		"config_complete_nonce", configNonce,
-	)
-	for _, frame := range frames {
-		if err := c.WriteDirect(frame); err != nil {
-			p.logger.Debug("failed to send cached config frame", "client", c.Addr(), "error", err)
-			return
-		}
-	}
 }
 
 // replayCachedConfig sends the cached node configuration to a client that
