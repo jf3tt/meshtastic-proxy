@@ -7,7 +7,7 @@ import (
 )
 
 func TestNewMetrics(t *testing.T) {
-	m := New(10)
+	m := New(10, 300)
 	if m == nil {
 		t.Fatal("New returned nil")
 	}
@@ -20,14 +20,17 @@ func TestNewMetrics(t *testing.T) {
 }
 
 func TestNewMetricsDefaultMax(t *testing.T) {
-	m := New(0)
+	m := New(0, 0)
 	if m.maxMessages != 100 {
 		t.Fatalf("expected default maxMessages=100, got %d", m.maxMessages)
+	}
+	if m.maxSamples != 300 {
+		t.Fatalf("expected default maxSamples=300, got %d", m.maxSamples)
 	}
 }
 
 func TestUptime(t *testing.T) {
-	m := New(10)
+	m := New(10, 300)
 	time.Sleep(10 * time.Millisecond)
 	uptime := m.Uptime()
 	if uptime < 10*time.Millisecond {
@@ -36,7 +39,7 @@ func TestUptime(t *testing.T) {
 }
 
 func TestRecordAndRetrieveMessages(t *testing.T) {
-	m := New(5)
+	m := New(5, 300)
 
 	for i := 0; i < 3; i++ {
 		m.RecordMessage(MessageRecord{
@@ -59,7 +62,7 @@ func TestRecordAndRetrieveMessages(t *testing.T) {
 }
 
 func TestMessageRingBuffer(t *testing.T) {
-	m := New(3)
+	m := New(3, 300)
 
 	for i := 0; i < 5; i++ {
 		m.RecordMessage(MessageRecord{
@@ -83,7 +86,7 @@ func TestMessageRingBuffer(t *testing.T) {
 }
 
 func TestMessageRecordExpandedFields(t *testing.T) {
-	m := New(10)
+	m := New(10, 300)
 
 	m.RecordMessage(MessageRecord{
 		Direction: "from_node",
@@ -120,7 +123,7 @@ func TestMessageRecordExpandedFields(t *testing.T) {
 }
 
 func TestSnapshot(t *testing.T) {
-	m := New(10)
+	m := New(10, 300)
 	m.NodeAddress = "192.168.1.100:4403"
 	m.NodeConnected.Store(true)
 	m.ActiveClients.Store(3)
@@ -171,7 +174,7 @@ func TestSnapshot(t *testing.T) {
 }
 
 func TestAtomicCounters(t *testing.T) {
-	m := New(10)
+	m := New(10, 300)
 
 	done := make(chan struct{})
 	for i := 0; i < 100; i++ {
@@ -213,7 +216,7 @@ func TestFormatDuration(t *testing.T) {
 }
 
 func TestMessageTypeCounts(t *testing.T) {
-	m := New(100)
+	m := New(100, 300)
 
 	// Record messages with different PortNum values
 	m.RecordMessage(MessageRecord{Type: "mesh_packet", PortNum: "TEXT_MESSAGE_APP", Size: 50})
@@ -242,7 +245,7 @@ func TestMessageTypeCounts(t *testing.T) {
 }
 
 func TestTrafficSeries(t *testing.T) {
-	m := New(10)
+	m := New(10, 300)
 
 	// Initially empty
 	series := m.TrafficSeries()
@@ -294,7 +297,7 @@ func TestTrafficSeries(t *testing.T) {
 }
 
 func TestTrafficSeriesRingBuffer(t *testing.T) {
-	m := New(10)
+	m := New(10, 300)
 	m.maxSamples = 3 // override for test
 
 	// Sample 5 times
@@ -310,7 +313,7 @@ func TestTrafficSeriesRingBuffer(t *testing.T) {
 }
 
 func TestStartSampler(t *testing.T) {
-	m := New(10)
+	m := New(10, 300)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -327,7 +330,7 @@ func TestStartSampler(t *testing.T) {
 }
 
 func TestSubscribeUnsubscribe(t *testing.T) {
-	m := New(10)
+	m := New(10, 300)
 
 	ch := m.Subscribe()
 
@@ -365,7 +368,7 @@ func TestSubscribeUnsubscribe(t *testing.T) {
 }
 
 func TestSubscribeMultipleListeners(t *testing.T) {
-	m := New(10)
+	m := New(10, 300)
 
 	ch1 := m.Subscribe()
 	ch2 := m.Subscribe()
@@ -393,7 +396,7 @@ func TestSubscribeMultipleListeners(t *testing.T) {
 }
 
 func TestPublishDropsSlowSubscriber(t *testing.T) {
-	m := New(10)
+	m := New(10, 300)
 
 	ch := m.Subscribe()
 

@@ -1,4 +1,4 @@
-.PHONY: build run test lint clean docker docker-up docker-down tidy setup install-hooks
+.PHONY: build run test lint clean docker docker-up docker-down tidy setup install-hooks css
 
 BINARY := meshtastic-proxy
 BUILD_DIR := ./bin
@@ -66,3 +66,13 @@ setup:
 install-hooks:
 	git config core.hooksPath .githooks
 	@echo "Git hooks installed from .githooks/"
+
+# Regenerate Tailwind CSS from dashboard HTML classes.
+# Requires tailwindcss standalone CLI: https://tailwindcss.com/blog/standalone-cli
+# Downloaded binary must be on PATH as 'tailwindcss'.
+TAILWINDCSS := $(shell command -v tailwindcss 2>/dev/null || echo tailwindcss)
+STATIC_DIR := internal/web/templates/static
+
+css:
+	$(TAILWINDCSS) -i $(STATIC_DIR)/tailwind-input.css -o $(STATIC_DIR)/tailwind.css --minify
+	@echo "Tailwind CSS regenerated: $(STATIC_DIR)/tailwind.css"

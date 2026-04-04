@@ -56,13 +56,15 @@ func newTestClient(t *testing.T) (*Client, net.Conn, <-chan struct{}) {
 
 	serverConn, clientConn := newTestConnPair(t)
 
-	m := metrics.New(10)
+	m := metrics.New(10, 300)
 	closeCh := make(chan struct{})
 
 	client := NewClient(
 		clientConn,
 		slog.Default(),
 		m,
+		256,
+		0,                       // no idle timeout in tests
 		func(payload []byte) {}, // onMessage — no-op
 		func(c *Client) {
 			close(closeCh)
@@ -209,10 +211,9 @@ func TestWriteDirectThenRun(t *testing.T) {
 		close(done)
 	}()
 
-	// Give loops time to start.
-	time.Sleep(50 * time.Millisecond)
-
 	// Send a live frame through the channel.
+	// No sleep needed: Send enqueues to the buffered channel, and
+	// readFrame waits with a deadline for the writeLoop to drain it.
 	if !client.Send([]byte("live")) {
 		t.Fatal("Send returned false after Run started")
 	}
@@ -252,10 +253,8 @@ func TestClientRunBackwardsCompatible(t *testing.T) {
 		close(done)
 	}()
 
-	// Give Run a moment to start the loops.
-	time.Sleep(50 * time.Millisecond)
-
-	// Send a frame.
+	// Send a frame. No sleep needed: Send enqueues to the buffered
+	// channel, and readFrame waits with a deadline for delivery.
 	if !client.Send([]byte("run-test")) {
 		t.Fatal("Send returned false")
 	}
@@ -288,13 +287,15 @@ func TestSendBufferFullDisconnects(t *testing.T) {
 	serverConn, clientConn := newTestConnPair(t)
 	_ = serverConn // not used, just keep alive
 
-	m := metrics.New(10)
+	m := metrics.New(10, 300)
 	closed := make(chan struct{})
 
 	client := NewClient(
 		clientConn,
 		slog.Default(),
 		m,
+		256,
+		0,
 		func(payload []byte) {},
 		func(c *Client) {
 			close(closed)

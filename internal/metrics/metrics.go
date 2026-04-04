@@ -54,6 +54,22 @@ type Metrics struct {
 	FramesFromNode atomic.Int64
 	FramesToNode   atomic.Int64
 
+	// Node connection counters
+	NodeReconnects       atomic.Int64
+	NodeConnectionErrors atomic.Int64
+
+	// Config cache status
+	ConfigCacheFrames atomic.Int64
+
+	// configCacheUpdatedAt is the time the config cache was last populated.
+	configCacheMu        sync.RWMutex
+	configCacheUpdatedAt time.Time
+
+	// Config cache replay counters (by request type)
+	ConfigReplaysFull       atomic.Int64
+	ConfigReplaysConfigOnly atomic.Int64
+	ConfigReplaysNodesOnly  atomic.Int64
+
 	// Message log (ring buffer)
 	mu          sync.Mutex
 	messages    []MessageRecord
@@ -78,16 +94,19 @@ type Metrics struct {
 }
 
 // New creates a new Metrics instance.
-func New(maxMessages int) *Metrics {
+func New(maxMessages, maxTrafficSamples int) *Metrics {
 	if maxMessages <= 0 {
 		maxMessages = 100
+	}
+	if maxTrafficSamples <= 0 {
+		maxTrafficSamples = 300
 	}
 	return &Metrics{
 		startTime:      time.Now(),
 		messages:       make([]MessageRecord, 0, maxMessages),
 		maxMessages:    maxMessages,
-		trafficSamples: make([]TrafficSample, 0, 300),
-		maxSamples:     300, // 5 minutes at 1s interval
+		trafficSamples: make([]TrafficSample, 0, maxTrafficSamples),
+		maxSamples:     maxTrafficSamples,
 		typeCounts:     make(map[string]int64),
 		subscribers:    make(map[chan Event]struct{}),
 	}
@@ -142,12 +161,38 @@ func (m *Metrics) sampleTraffic() {
 	m.trafficMu.Unlock()
 
 	// Publish metrics event
-	m.publish(Event{Type: "metrics", Data: m.Snapshot()})
+	m.publish(Event{Type: "metrics", Data: m.SnapshotDelta(sample)})
 }
 
 // Uptime returns the duration since the proxy started.
 func (m *Metrics) Uptime() time.Duration {
 	return time.Since(m.startTime)
+}
+
+// SetConfigCacheUpdated records the time and frame count of the latest config cache.
+func (m *Metrics) SetConfigCacheUpdated(frames int) {
+	m.ConfigCacheFrames.Store(int64(frames))
+	m.configCacheMu.Lock()
+	m.configCacheUpdatedAt = time.Now()
+	m.configCacheMu.Unlock()
+}
+
+// ConfigCacheAge returns the time elapsed since the config cache was last updated.
+// Returns zero if the cache has never been populated.
+func (m *Metrics) ConfigCacheAge() time.Duration {
+	m.configCacheMu.RLock()
+	t := m.configCacheUpdatedAt
+	m.configCacheMu.RUnlock()
+	if t.IsZero() {
+		return 0
+	}
+	return time.Since(t)
+}
+
+// Ready returns true if the proxy is ready to serve clients:
+// the node is connected and the config cache is non-empty.
+func (m *Metrics) Ready() bool {
+	return m.NodeConnected.Load() && m.ConfigCacheFrames.Load() > 0
 }
 
 // RecordMessage adds a message to the log.
@@ -237,6 +282,12 @@ func (m *Metrics) publish(evt Event) {
 	}
 }
 
+// PublishClients sends a "clients" event to all SSE subscribers with the
+// current list of connected client addresses.
+func (m *Metrics) PublishClients(clients []string) {
+	m.publish(Event{Type: "clients", Data: clients})
+}
+
 // Snapshot returns a point-in-time snapshot of all metrics.
 type Snapshot struct {
 	Uptime            time.Duration    `json:"uptime"`
@@ -251,11 +302,32 @@ type Snapshot struct {
 	Messages          []MessageRecord  `json:"messages"`
 	TrafficSeries     []TrafficSample  `json:"traffic_series"`
 	MessageTypeCounts map[string]int64 `json:"message_type_counts"`
+
+	// Node connection reliability
+	NodeReconnects       int64 `json:"node_reconnects"`
+	NodeConnectionErrors int64 `json:"node_connection_errors"`
+
+	// Config cache status
+	ConfigCacheFrames int64  `json:"config_cache_frames"`
+	ConfigCacheAge    string `json:"config_cache_age"` // human-readable, e.g. "5m 12s"
+
+	// Config replay counters
+	ConfigReplaysFull       int64 `json:"config_replays_full"`
+	ConfigReplaysConfigOnly int64 `json:"config_replays_config_only"`
+	ConfigReplaysNodesOnly  int64 `json:"config_replays_nodes_only"`
+
+	// Configured limits (for JS to use)
+	MaxTrafficSamples int `json:"max_traffic_samples"`
 }
 
 // Snapshot returns a consistent snapshot of the current metrics.
 func (m *Metrics) Snapshot() Snapshot {
 	uptime := m.Uptime()
+	cacheAge := m.ConfigCacheAge()
+	cacheAgeStr := ""
+	if cacheAge > 0 {
+		cacheAgeStr = formatDuration(cacheAge)
+	}
 	return Snapshot{
 		Uptime:            uptime,
 		UptimeStr:         formatDuration(uptime),
@@ -269,6 +341,77 @@ func (m *Metrics) Snapshot() Snapshot {
 		Messages:          m.Messages(),
 		TrafficSeries:     m.TrafficSeries(),
 		MessageTypeCounts: m.MessageTypeCounts(),
+
+		NodeReconnects:       m.NodeReconnects.Load(),
+		NodeConnectionErrors: m.NodeConnectionErrors.Load(),
+
+		ConfigCacheFrames: m.ConfigCacheFrames.Load(),
+		ConfigCacheAge:    cacheAgeStr,
+
+		ConfigReplaysFull:       m.ConfigReplaysFull.Load(),
+		ConfigReplaysConfigOnly: m.ConfigReplaysConfigOnly.Load(),
+		ConfigReplaysNodesOnly:  m.ConfigReplaysNodesOnly.Load(),
+
+		MaxTrafficSamples: m.maxSamples,
+	}
+}
+
+// SnapshotDelta is a lightweight metrics update sent via SSE every second.
+// It contains only scalar counters and the latest traffic sample, omitting
+// the full message log and traffic series (which are sent in the initial
+// full Snapshot and via individual "message" events).
+type SnapshotDelta struct {
+	UptimeStr         string           `json:"uptime_str"`
+	NodeConnected     bool             `json:"node_connected"`
+	NodeAddress       string           `json:"node_address"`
+	ActiveClients     int64            `json:"active_clients"`
+	BytesFromNode     int64            `json:"bytes_from_node"`
+	BytesToNode       int64            `json:"bytes_to_node"`
+	FramesFromNode    int64            `json:"frames_from_node"`
+	FramesToNode      int64            `json:"frames_to_node"`
+	LatestSample      TrafficSample    `json:"latest_sample"`
+	MessageTypeCounts map[string]int64 `json:"message_type_counts"`
+
+	NodeReconnects       int64 `json:"node_reconnects"`
+	NodeConnectionErrors int64 `json:"node_connection_errors"`
+
+	ConfigCacheFrames int64  `json:"config_cache_frames"`
+	ConfigCacheAge    string `json:"config_cache_age"`
+
+	ConfigReplaysFull       int64 `json:"config_replays_full"`
+	ConfigReplaysConfigOnly int64 `json:"config_replays_config_only"`
+	ConfigReplaysNodesOnly  int64 `json:"config_replays_nodes_only"`
+}
+
+// SnapshotDelta returns a lightweight delta with the given latest traffic sample.
+func (m *Metrics) SnapshotDelta(sample TrafficSample) SnapshotDelta {
+	uptime := m.Uptime()
+	cacheAge := m.ConfigCacheAge()
+	cacheAgeStr := ""
+	if cacheAge > 0 {
+		cacheAgeStr = formatDuration(cacheAge)
+	}
+	return SnapshotDelta{
+		UptimeStr:         formatDuration(uptime),
+		NodeConnected:     m.NodeConnected.Load(),
+		NodeAddress:       m.NodeAddress,
+		ActiveClients:     m.ActiveClients.Load(),
+		BytesFromNode:     m.BytesFromNode.Load(),
+		BytesToNode:       m.BytesToNode.Load(),
+		FramesFromNode:    m.FramesFromNode.Load(),
+		FramesToNode:      m.FramesToNode.Load(),
+		LatestSample:      sample,
+		MessageTypeCounts: m.MessageTypeCounts(),
+
+		NodeReconnects:       m.NodeReconnects.Load(),
+		NodeConnectionErrors: m.NodeConnectionErrors.Load(),
+
+		ConfigCacheFrames: m.ConfigCacheFrames.Load(),
+		ConfigCacheAge:    cacheAgeStr,
+
+		ConfigReplaysFull:       m.ConfigReplaysFull.Load(),
+		ConfigReplaysConfigOnly: m.ConfigReplaysConfigOnly.Load(),
+		ConfigReplaysNodesOnly:  m.ConfigReplaysNodesOnly.Load(),
 	}
 }
 

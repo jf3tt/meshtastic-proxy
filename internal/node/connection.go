@@ -1,6 +1,7 @@
 package node
 
 import (
+	"bufio"
 	"context"
 	"encoding/hex"
 	"fmt"
@@ -22,6 +23,8 @@ type Connection struct {
 	address              string
 	reconnectInterval    time.Duration
 	maxReconnectInterval time.Duration
+	dialTimeout          time.Duration
+	readTimeout          time.Duration
 
 	metrics *metrics.Metrics
 	logger  *slog.Logger
@@ -42,15 +45,17 @@ type Connection struct {
 }
 
 // NewConnection creates a new node connection manager.
-func NewConnection(address string, reconnectInterval, maxReconnectInterval time.Duration, m *metrics.Metrics, logger *slog.Logger) *Connection {
+func NewConnection(address string, reconnectInterval, maxReconnectInterval, dialTimeout, readTimeout time.Duration, fromBuffer, toBuffer int, m *metrics.Metrics, logger *slog.Logger) *Connection {
 	return &Connection{
 		address:              address,
 		reconnectInterval:    reconnectInterval,
 		maxReconnectInterval: maxReconnectInterval,
+		dialTimeout:          dialTimeout,
+		readTimeout:          readTimeout,
 		metrics:              m,
 		logger:               logger,
-		fromNode:             make(chan []byte, 256),
-		toNode:               make(chan []byte, 64),
+		fromNode:             make(chan []byte, fromBuffer),
+		toNode:               make(chan []byte, toBuffer),
 	}
 }
 
@@ -89,6 +94,7 @@ func (c *Connection) ConfigCache() [][]byte {
 // and handles reconnection. It blocks until the context is cancelled.
 func (c *Connection) Run(ctx context.Context) {
 	backoff := c.reconnectInterval
+	firstConnect := true
 
 	for {
 		select {
@@ -104,6 +110,7 @@ func (c *Connection) Run(ctx context.Context) {
 		if err != nil {
 			c.logger.Error("failed to connect to node", "error", err, "retry_in", backoff)
 			c.metrics.NodeConnected.Store(false)
+			c.metrics.NodeConnectionErrors.Add(1)
 			select {
 			case <-ctx.Done():
 				return
@@ -118,6 +125,10 @@ func (c *Connection) Run(ctx context.Context) {
 		c.conn = conn
 		c.mu.Unlock()
 		c.metrics.NodeConnected.Store(true)
+		if !firstConnect {
+			c.metrics.NodeReconnects.Add(1)
+		}
+		firstConnect = false
 		backoff = c.reconnectInterval
 		c.logger.Info("connected to node", "address", c.address)
 
@@ -144,7 +155,9 @@ func (c *Connection) Run(ctx context.Context) {
 }
 
 func (c *Connection) dial(ctx context.Context) (net.Conn, error) {
-	var d net.Dialer
+	d := net.Dialer{
+		Timeout: c.dialTimeout,
+	}
 	conn, err := d.DialContext(ctx, "tcp", c.address)
 	if err != nil {
 		return nil, fmt.Errorf("dialing %s: %w", c.address, err)
@@ -188,6 +201,10 @@ func (c *Connection) runConnection(ctx context.Context, conn net.Conn) error {
 }
 
 func (c *Connection) readLoop(ctx context.Context, conn net.Conn) error {
+	// Wrap connection in a buffered reader to reduce syscall overhead.
+	// ReadFrame scans byte-by-byte for magic bytes; bufio batches reads.
+	br := bufio.NewReaderSize(conn, 4096)
+
 	// Collect config frames during handshake
 	var collectingConfig bool
 	var configFrames [][]byte
@@ -199,7 +216,14 @@ func (c *Connection) readLoop(ctx context.Context, conn net.Conn) error {
 		default:
 		}
 
-		payload, err := protocol.ReadFrame(conn)
+		// Set read deadline to detect silent node death.
+		// If no data arrives within readTimeout, the read returns a timeout
+		// error and we reconnect.
+		if c.readTimeout > 0 {
+			_ = conn.SetReadDeadline(time.Now().Add(c.readTimeout))
+		}
+
+		payload, err := protocol.ReadFrame(br)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -227,6 +251,7 @@ func (c *Connection) readLoop(ctx context.Context, conn net.Conn) error {
 				c.configCache = configFrames
 				c.configMu.Unlock()
 				collectingConfig = false
+				c.metrics.SetConfigCacheUpdated(len(configFrames))
 				c.logger.Info("node config cached",
 					"frames", len(configFrames),
 					"breakdown", countCacheFrameTypes(configFrames),

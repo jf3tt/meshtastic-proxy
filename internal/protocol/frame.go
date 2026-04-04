@@ -70,25 +70,22 @@ func ReadFrame(r io.Reader) ([]byte, error) {
 }
 
 // WriteFrame writes a Meshtastic frame to the writer.
-// It prepends the 4-byte header (magic bytes + big-endian length) to the payload.
+// It prepends the 4-byte header (magic bytes + big-endian length) to the payload
+// and writes the entire frame in a single Write call to avoid TCP fragmentation.
 func WriteFrame(w io.Writer, payload []byte) error {
 	if len(payload) > MaxFrameSize {
 		return fmt.Errorf("payload too large: %d > %d", len(payload), MaxFrameSize)
 	}
 
-	header := [HeaderSize]byte{
-		MagicByte1,
-		MagicByte2,
-		byte(len(payload) >> 8),
-		byte(len(payload)),
-	}
+	frame := make([]byte, HeaderSize+len(payload))
+	frame[0] = MagicByte1
+	frame[1] = MagicByte2
+	frame[2] = byte(len(payload) >> 8)
+	frame[3] = byte(len(payload))
+	copy(frame[HeaderSize:], payload)
 
-	if _, err := w.Write(header[:]); err != nil {
-		return fmt.Errorf("writing frame header: %w", err)
-	}
-
-	if _, err := w.Write(payload); err != nil {
-		return fmt.Errorf("writing frame payload: %w", err)
+	if _, err := w.Write(frame); err != nil {
+		return fmt.Errorf("writing frame: %w", err)
 	}
 
 	return nil

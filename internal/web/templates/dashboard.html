@@ -5,21 +5,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Meshtastic Proxy Dashboard</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
-    <script>
-        tailwind.config = {
-            darkMode: 'class',
-            theme: {
-                extend: {
-                    fontFamily: {
-                        mono: ['JetBrains Mono', 'Fira Code', 'Cascadia Code', 'monospace'],
-                    },
-                },
-            },
-        }
-    </script>
+    <link rel="stylesheet" href="/static/tailwind.css">
     <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/chart.js"></script>
 </head>
 <body class="bg-gray-950 text-gray-100 min-h-screen font-sans">
     <div class="max-w-7xl mx-auto px-4 py-6 sm:px-6 lg:px-8">
@@ -35,14 +23,17 @@
                 {{end}}">
                 {{if .Metrics.NodeConnected}}Connected{{else}}Disconnected{{end}}
             </span>
-            <div class="ml-auto flex items-center gap-2">
+            <div class="ml-auto flex items-center gap-3">
+                <button id="pause-btn"
+                    class="text-xs font-semibold px-3 py-1 rounded-lg bg-gray-800 border border-gray-700 text-gray-300 hover:border-indigo-500/50 hover:text-indigo-400 transition-colors"
+                    title="Pause/resume live updates">Live</button>
                 <span id="sse-indicator" class="w-2 h-2 rounded-full bg-gray-600" title="SSE disconnected"></span>
                 <span id="sse-label" class="text-xs text-gray-500">Connecting...</span>
             </div>
         </header>
 
         <!-- Status Cards -->
-        <section class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-6">
+        <section class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
             <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 hover:border-indigo-500/50 transition-colors">
                 <div class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-1">Node</div>
                 <div id="card-node" class="text-lg font-bold font-mono truncate">{{.Metrics.NodeAddress}}</div>
@@ -62,17 +53,22 @@
             <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 hover:border-indigo-500/50 transition-colors">
                 <div class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-1">Uptime</div>
                 <div id="card-uptime" class="text-lg font-bold font-mono">{{.Metrics.UptimeStr}}</div>
-                <div class="text-sm text-gray-500">Since proxy start</div>
+                <div id="card-reconnects" class="text-sm text-gray-500">{{.Metrics.NodeReconnects}} reconnects</div>
+            </div>
+            <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 hover:border-indigo-500/50 transition-colors">
+                <div class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-1">Config Cache</div>
+                <div id="card-cache-frames" class="text-lg font-bold font-mono">{{.Metrics.ConfigCacheFrames}} frames</div>
+                <div id="card-cache-age" class="text-sm text-gray-500">{{if .Metrics.ConfigCacheAge}}updated {{.Metrics.ConfigCacheAge}} ago{{else}}not cached{{end}}</div>
             </div>
             <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 hover:border-indigo-500/50 transition-colors">
                 <div class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-1">From Node</div>
                 <div id="card-frames-in" class="text-lg font-bold font-mono">{{.Metrics.FramesFromNode}}</div>
-                <div id="card-bytes-in" class="text-sm text-gray-500">{{.Metrics.BytesFromNode}} bytes</div>
+                <div id="card-bytes-in" class="text-sm text-gray-500">{{formatBytes .Metrics.BytesFromNode}}</div>
             </div>
             <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 hover:border-indigo-500/50 transition-colors">
                 <div class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-1">To Node</div>
                 <div id="card-frames-out" class="text-lg font-bold font-mono">{{.Metrics.FramesToNode}}</div>
-                <div id="card-bytes-out" class="text-sm text-gray-500">{{.Metrics.BytesToNode}} bytes</div>
+                <div id="card-bytes-out" class="text-sm text-gray-500">{{formatBytes .Metrics.BytesToNode}}</div>
             </div>
         </section>
 
@@ -124,7 +120,11 @@
         <section class="bg-gray-900 border border-gray-800 rounded-xl p-4 mb-6">
             <div class="flex items-center justify-between mb-3">
                 <h2 class="text-sm font-semibold">Recent Messages</h2>
-                <span id="msg-count" class="text-xs text-gray-500">{{len .Metrics.Messages}} messages</span>
+                <div class="flex items-center gap-3">
+                    <input id="msg-filter" type="text" placeholder="Filter messages..."
+                        class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1 text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:border-indigo-500/50 w-48">
+                    <span id="msg-count" class="text-xs text-gray-500">{{len .Metrics.Messages}} messages</span>
+                </div>
             </div>
             <div class="overflow-x-auto max-h-[500px] overflow-y-auto">
                 <table class="w-full text-sm">
@@ -194,13 +194,24 @@
     (function() {
         'use strict';
 
+        // ── Human-readable bytes formatter ──
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const units = ['B', 'KB', 'MB', 'GB'];
+            const k = 1024;
+            const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), units.length - 1);
+            const val = bytes / Math.pow(k, i);
+            return (i === 0 ? val : val.toFixed(1)) + ' ' + units[i];
+        }
+
         // ── Chart.js defaults for dark theme ──
         Chart.defaults.color = '#6b7280';
         Chart.defaults.borderColor = '#1f2937';
 
         // ── Traffic Line Chart ──
         const trafficCtx = document.getElementById('traffic-chart').getContext('2d');
-        const MAX_TRAFFIC_POINTS = 300;
+        // Server-configured limit; will be updated from initial SSE snapshot.
+        let maxTrafficPoints = initialTrafficSeries.length || 300;
 
         const trafficData = {
             labels: initialTrafficSeries.map(s => {
@@ -322,6 +333,21 @@
         const sseIndicator = document.getElementById('sse-indicator');
         const sseLabel = document.getElementById('sse-label');
         let reconnectDelay = 1000;
+        let paused = false;
+
+        const pauseBtn = document.getElementById('pause-btn');
+        pauseBtn.addEventListener('click', function() {
+            paused = !paused;
+            if (paused) {
+                pauseBtn.textContent = 'Paused';
+                pauseBtn.classList.add('border-amber-500/50', 'text-amber-400');
+                pauseBtn.classList.remove('border-gray-700', 'text-gray-300');
+            } else {
+                pauseBtn.textContent = 'Live';
+                pauseBtn.classList.remove('border-amber-500/50', 'text-amber-400');
+                pauseBtn.classList.add('border-gray-700', 'text-gray-300');
+            }
+        });
 
         function connectSSE() {
             const evtSource = new EventSource('/api/events');
@@ -334,13 +360,20 @@
             };
 
             evtSource.addEventListener('metrics', function(e) {
+                if (paused) return;
                 const snap = JSON.parse(e.data);
                 updateMetricsUI(snap);
             });
 
             evtSource.addEventListener('message', function(e) {
+                if (paused) return;
                 const msg = JSON.parse(e.data);
                 prependMessage(msg);
+            });
+
+            evtSource.addEventListener('clients', function(e) {
+                const clients = JSON.parse(e.data);
+                updateClientsUI(clients);
             });
 
             evtSource.onerror = function() {
@@ -353,7 +386,8 @@
             };
         }
 
-        // ── Update UI from metrics snapshot ──
+        // ── Update UI from metrics snapshot or delta ──
+        // Full snapshot has `traffic_series` (array); delta has `latest_sample` (object).
         function updateMetricsUI(snap) {
             // Badge
             const badge = document.getElementById('node-badge');
@@ -376,19 +410,40 @@
 
             document.getElementById('card-clients').textContent = snap.active_clients;
             document.getElementById('card-uptime').textContent = snap.uptime_str;
+            document.getElementById('card-reconnects').textContent = snap.node_reconnects + ' reconnects';
+            document.getElementById('card-cache-frames').textContent = snap.config_cache_frames + ' frames';
+            document.getElementById('card-cache-age').textContent = snap.config_cache_age ? 'updated ' + snap.config_cache_age + ' ago' : 'not cached';
             document.getElementById('card-frames-in').textContent = snap.frames_from_node;
-            document.getElementById('card-bytes-in').textContent = snap.bytes_from_node + ' bytes';
+            document.getElementById('card-bytes-in').textContent = formatBytes(snap.bytes_from_node);
             document.getElementById('card-frames-out').textContent = snap.frames_to_node;
-            document.getElementById('card-bytes-out').textContent = snap.bytes_to_node + ' bytes';
+            document.getElementById('card-bytes-out').textContent = formatBytes(snap.bytes_to_node);
 
-            // Traffic chart — full replacement from server ring buffer
+            // Traffic chart
             if (snap.traffic_series && snap.traffic_series.length > 0) {
+                // Full snapshot — replace all data and sync max points
+                if (snap.max_traffic_samples) {
+                    maxTrafficPoints = snap.max_traffic_samples;
+                }
                 trafficData.labels = snap.traffic_series.map(s => {
                     const d = new Date(s.ts);
                     return d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
                 });
                 trafficData.datasets[0].data = snap.traffic_series.map(s => s.fi);
                 trafficData.datasets[1].data = snap.traffic_series.map(s => s.fo);
+                trafficChart.update('none');
+            } else if (snap.latest_sample) {
+                // Delta — append single sample, trim to server-configured limit
+                const s = snap.latest_sample;
+                const d = new Date(s.ts);
+                const label = d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+                trafficData.labels.push(label);
+                trafficData.datasets[0].data.push(s.fi);
+                trafficData.datasets[1].data.push(s.fo);
+                while (trafficData.labels.length > maxTrafficPoints) {
+                    trafficData.labels.shift();
+                    trafficData.datasets[0].data.shift();
+                    trafficData.datasets[1].data.shift();
+                }
                 trafficChart.update('none');
             }
 
@@ -433,36 +488,35 @@
 
             tbody.insertBefore(tr, tbody.firstChild);
 
+            // Apply current filter to new row
+            if (filterTerm && !tr.textContent.toLowerCase().includes(filterTerm)) {
+                tr.style.display = 'none';
+            }
+
             // Limit rows to 200
             while (tbody.children.length > 200) {
                 tbody.removeChild(tbody.lastChild);
             }
 
             // Update count
-            document.getElementById('msg-count').textContent = tbody.children.length + ' messages';
+            applyMessageFilter();
         }
 
-        // ── Fetch client list periodically (not in SSE stream) ──
-        async function refreshClients() {
-            try {
-                const resp = await fetch('/api/clients');
-                const data = await resp.json();
-                const section = document.getElementById('clients-section');
-                const tbody = document.getElementById('clients-tbody');
+        // ── Update client list from SSE ──
+        function updateClientsUI(clients) {
+            const section = document.getElementById('clients-section');
+            const tbody = document.getElementById('clients-tbody');
 
-                if (data.clients && data.clients.length > 0) {
-                    section.classList.remove('hidden');
-                    tbody.innerHTML = data.clients.map((addr, i) =>
-                        `<tr class="hover:bg-gray-800/50">
-                            <td class="px-3 py-2 border-b border-gray-800/50">${i}</td>
-                            <td class="px-3 py-2 border-b border-gray-800/50"><code class="font-mono text-xs">${esc(addr)}</code></td>
-                        </tr>`
-                    ).join('');
-                } else {
-                    section.classList.add('hidden');
-                }
-            } catch (e) {
-                // Ignore fetch errors
+            if (clients && clients.length > 0) {
+                section.classList.remove('hidden');
+                tbody.innerHTML = clients.map((addr, i) =>
+                    `<tr class="hover:bg-gray-800/50">
+                        <td class="px-3 py-2 border-b border-gray-800/50">${i}</td>
+                        <td class="px-3 py-2 border-b border-gray-800/50"><code class="font-mono text-xs">${esc(addr)}</code></td>
+                    </tr>`
+                ).join('');
+            } else {
+                section.classList.add('hidden');
             }
         }
 
@@ -474,10 +528,32 @@
             return el.innerHTML;
         }
 
+        // ── Message filter ──
+        let filterTerm = '';
+        const filterInput = document.getElementById('msg-filter');
+
+        filterInput.addEventListener('input', function() {
+            filterTerm = this.value.toLowerCase();
+            applyMessageFilter();
+        });
+
+        function applyMessageFilter() {
+            const tbody = document.getElementById('messages-tbody');
+            const rows = tbody.querySelectorAll('tr');
+            let visible = 0;
+            for (const row of rows) {
+                if (!filterTerm || row.textContent.toLowerCase().includes(filterTerm)) {
+                    row.style.display = '';
+                    visible++;
+                } else {
+                    row.style.display = 'none';
+                }
+            }
+            document.getElementById('msg-count').textContent = visible + ' messages' + (filterTerm ? ' (filtered)' : '');
+        }
+
         // ── Bootstrap ──
         connectSSE();
-        setInterval(refreshClients, 5000);
-        refreshClients();
     })();
     </script>
 </body>

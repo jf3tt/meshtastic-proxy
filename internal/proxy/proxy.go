@@ -20,15 +20,6 @@ const (
 	nonceOnlyNodes  = 69421 // NodeInfo DB only, skip config
 )
 
-// ownNodeInfoDelay is a short pause inserted after sending the connected
-// node's own NodeInfo during config-only replay (nonce 69420). The iOS
-// Meshtastic app creates NodeInfoEntity in a CoreData background context;
-// this delay gives the main-thread viewContext time to merge the entity
-// before ConfigCompleteId triggers the UI refresh. Without it, the
-// SwiftUI view queries viewContext before the merge, connectedNode is nil,
-// and the Actions section disappears.
-const ownNodeInfoDelay = 50 * time.Millisecond
-
 // NodeConnection defines the interface for the node connection used by Proxy.
 // This allows substituting a mock in tests.
 type NodeConnection interface {
@@ -40,25 +31,32 @@ type NodeConnection interface {
 // Proxy is the main hub that accepts client connections and multiplexes
 // traffic between clients and the Meshtastic node.
 type Proxy struct {
-	listenAddr string
-	maxClients int
-	nodeConn   NodeConnection
-	metrics    *metrics.Metrics
-	logger     *slog.Logger
+	listenAddr        string
+	maxClients        int
+	clientSendBuffer  int
+	clientIdleTimeout time.Duration
+	iosNodeInfoDelay  time.Duration
+	nodeConn          NodeConnection
+	metrics           *metrics.Metrics
+	logger            *slog.Logger
 
 	mu      sync.RWMutex
 	clients map[*Client]struct{}
+	wg      sync.WaitGroup // tracks client goroutines for graceful shutdown
 }
 
 // New creates a new Proxy instance.
-func New(listenAddr string, maxClients int, nodeConn NodeConnection, m *metrics.Metrics, logger *slog.Logger) *Proxy {
+func New(listenAddr string, maxClients, clientSendBuffer int, clientIdleTimeout, iosNodeInfoDelay time.Duration, nodeConn NodeConnection, m *metrics.Metrics, logger *slog.Logger) *Proxy {
 	return &Proxy{
-		listenAddr: listenAddr,
-		maxClients: maxClients,
-		nodeConn:   nodeConn,
-		metrics:    m,
-		logger:     logger,
-		clients:    make(map[*Client]struct{}),
+		listenAddr:        listenAddr,
+		maxClients:        maxClients,
+		clientSendBuffer:  clientSendBuffer,
+		clientIdleTimeout: clientIdleTimeout,
+		iosNodeInfoDelay:  iosNodeInfoDelay,
+		nodeConn:          nodeConn,
+		metrics:           m,
+		logger:            logger,
+		clients:           make(map[*Client]struct{}),
 	}
 }
 
@@ -88,7 +86,10 @@ func (p *Proxy) Run(ctx context.Context) error {
 		conn, err := listener.Accept()
 		if err != nil {
 			if ctx.Err() != nil {
-				return nil // graceful shutdown
+				// Graceful shutdown: close all active clients and wait.
+				p.closeAllClients()
+				p.wg.Wait()
+				return nil
 			}
 			p.logger.Error("accept error", "error", err)
 			continue
@@ -110,11 +111,7 @@ func (p *Proxy) ClientAddrs() []string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
-	addrs := make([]string, 0, len(p.clients))
-	for c := range p.clients {
-		addrs = append(addrs, c.Addr())
-	}
-	return addrs
+	return p.clientAddrsLocked()
 }
 
 func (p *Proxy) handleNewConnection(ctx context.Context, conn net.Conn) {
@@ -138,6 +135,8 @@ func (p *Proxy) handleNewConnection(ctx context.Context, conn net.Conn) {
 		conn,
 		p.logger,
 		p.metrics,
+		p.clientSendBuffer,
+		p.clientIdleTimeout,
 		func(payload []byte) {
 			// Intercept client-originated ToRadio frames that must not
 			// reach the node: want_config_id (answered from cache) and
@@ -155,6 +154,7 @@ func (p *Proxy) handleNewConnection(ctx context.Context, conn net.Conn) {
 					p.logger.Debug("client sent disconnect, closing client",
 						"client", client.Addr(),
 					)
+					client.SetDisconnectReason(DisconnectReasonClientSent)
 					client.Close()
 					return // do NOT forward to node
 				}
@@ -175,16 +175,22 @@ func (p *Proxy) handleNewConnection(ctx context.Context, conn net.Conn) {
 	// standard Meshtastic clients do after TCP connect). The onMessage
 	// callback above intercepts that request and replies from cache
 	// with the client's nonce via replayCachedConfig.
-	go client.Run(ctx)
+	p.wg.Add(1)
+	go func() {
+		defer p.wg.Done()
+		client.Run(ctx)
+	}()
 }
 
 func (p *Proxy) registerClient(c *Client) {
 	p.mu.Lock()
 	p.clients[c] = struct{}{}
 	count := len(p.clients)
+	addrs := p.clientAddrsLocked()
 	p.mu.Unlock()
 
 	p.metrics.ActiveClients.Store(int64(count))
+	p.metrics.PublishClients(addrs)
 	p.logger.Info("client connected", "client", c.Addr(), "total_clients", count)
 }
 
@@ -192,10 +198,45 @@ func (p *Proxy) unregisterClient(c *Client) {
 	p.mu.Lock()
 	delete(p.clients, c)
 	count := len(p.clients)
+	addrs := p.clientAddrsLocked()
 	p.mu.Unlock()
 
+	reason := c.GetDisconnectReason()
+	if reason == "" {
+		reason = DisconnectReasonServerClose
+	}
+
 	p.metrics.ActiveClients.Store(int64(count))
-	p.logger.Info("client disconnected", "client", c.Addr(), "total_clients", count)
+	p.metrics.PublishClients(addrs)
+	p.logger.Info("client disconnected",
+		"client", c.Addr(),
+		"reason", string(reason),
+		"session_duration", c.SessionDuration().Round(time.Second).String(),
+		"total_clients", count,
+	)
+}
+
+// clientAddrsLocked returns client addresses. Caller must hold p.mu.
+func (p *Proxy) clientAddrsLocked() []string {
+	addrs := make([]string, 0, len(p.clients))
+	for c := range p.clients {
+		addrs = append(addrs, c.Addr())
+	}
+	return addrs
+}
+
+// closeAllClients closes all active client connections for graceful shutdown.
+func (p *Proxy) closeAllClients() {
+	p.mu.RLock()
+	clients := make([]*Client, 0, len(p.clients))
+	for c := range p.clients {
+		clients = append(clients, c)
+	}
+	p.mu.RUnlock()
+
+	for _, c := range clients {
+		c.Close()
+	}
 }
 
 // replayCachedConfig sends the cached node configuration to a client that
@@ -214,13 +255,17 @@ func (p *Proxy) replayCachedConfig(c *Client, clientNonce uint32) {
 	// Filter frames based on special nonces (iOS two-phase config).
 	result := filterConfigCache(frames, clientNonce)
 
-	// Determine request type for logging.
+	// Determine request type for logging and metrics.
 	reqType := "full"
 	switch clientNonce {
 	case nonceOnlyConfig:
 		reqType = "config_only"
+		p.metrics.ConfigReplaysConfigOnly.Add(1)
 	case nonceOnlyNodes:
 		reqType = "nodes_only"
+		p.metrics.ConfigReplaysNodesOnly.Add(1)
+	default:
+		p.metrics.ConfigReplaysFull.Add(1)
 	}
 
 	// Log filter diagnostics.
@@ -276,9 +321,9 @@ func (p *Proxy) replayCachedConfig(c *Client, clientNonce uint32) {
 				ni.NodeInfo.GetNum() == result.Stats.MyNodeNum {
 				p.logger.Debug("pausing after own NodeInfo for CoreData sync",
 					"client", c.Addr(),
-					"delay", ownNodeInfoDelay,
+					"delay", p.iosNodeInfoDelay,
 				)
-				time.Sleep(ownNodeInfoDelay)
+				time.Sleep(p.iosNodeInfoDelay)
 			}
 		}
 	}
@@ -463,10 +508,10 @@ func (p *Proxy) broadcast(payload []byte) {
 	defer p.mu.RUnlock()
 
 	for c := range p.clients {
-		// Make a copy for each client
-		cp := make([]byte, len(payload))
-		copy(cp, payload)
-		c.Send(cp)
+		// Safe to share the same slice: payload from the node channel is
+		// never mutated after being received, and WriteFrame copies it
+		// into a new frame buffer before writing.
+		c.Send(payload)
 	}
 }
 

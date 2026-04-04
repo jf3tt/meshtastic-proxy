@@ -1,4 +1,10 @@
 # Meshtastic TCP Proxy configuration
+#
+# Environment variable overrides (take precedence over TOML values):
+#   MESHTASTIC_NODE_ADDRESS  -> node.address
+#   MESHTASTIC_PROXY_LISTEN  -> proxy.listen
+#   MESHTASTIC_WEB_LISTEN    -> web.listen
+#   MESHTASTIC_LOG_LEVEL     -> logging.level
 
 [node]
 # Address of the Meshtastic node (host:port)
@@ -10,12 +16,32 @@ reconnect_interval = "1s"
 # Maximum reconnect interval (exponential backoff cap)
 max_reconnect_interval = "30s"
 
+# TCP dial timeout for connecting to the node
+dial_timeout = "10s"
+
+# Read timeout for the node connection (triggers reconnect if no data received)
+read_timeout = "5m"
+
+# Channel buffer sizes for node communication
+from_buffer = 256   # FromRadio frames (node -> proxy)
+to_buffer = 64      # ToRadio frames (proxy -> node)
+
 [proxy]
 # Address to listen for client connections
 listen = ":4404"
 
 # Maximum number of simultaneous client connections
 max_clients = 10
+
+# Per-client send channel buffer size
+client_send_buffer = 256
+
+# Disconnect clients that send no data for this duration (0 = disabled)
+client_idle_timeout = "30m"
+
+# Delay after sending own NodeInfo during iOS config-only replay (nonce 69420).
+# Workaround for iOS CoreData timing issue. Set to 0 to disable.
+ios_nodeinfo_delay = "50ms"
 
 [web]
 # Address to listen for the web dashboard
@@ -53,3 +79,10 @@ level = "info"
 
 # Log format: text, json
 format = "text"
+
+[metrics]
+# Maximum number of messages to keep in the ring buffer
+max_messages = 200
+
+# Maximum number of traffic samples (1 per second) for charts
+max_traffic_samples = 300

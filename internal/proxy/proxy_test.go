@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"log/slog"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -16,6 +17,41 @@ import (
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
+
+// waitFor polls condition fn until it returns true or timeout elapses.
+// Used to replace time.Sleep with deterministic synchronization.
+func waitFor(t *testing.T, timeout time.Duration, fn func() bool, failMsg string) {
+	t.Helper()
+	deadline := time.After(timeout)
+	for {
+		if fn() {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal(failMsg)
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+}
+
+// dialWithRetry dials addr repeatedly until success or timeout.
+// Useful to wait for a listener to become ready without a fixed sleep.
+func dialWithRetry(t *testing.T, addr string, timeout time.Duration) net.Conn {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
+		if err == nil {
+			return conn
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("dialWithRetry(%s): timed out after %v: %v", addr, timeout, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
 
 // marshalFromRadio serializes a FromRadio message into bytes.
 func marshalFromRadio(t *testing.T, msg *pb.FromRadio) []byte {
@@ -535,11 +571,11 @@ func TestReplayCachedConfig_NonceSubstitution(t *testing.T) {
 	cache := buildTestCache(t, myNum, []uint32{0xAAAAAAAA})
 	mockNode := newMockNodeConn(cache)
 
-	m := metrics.New(10)
-	p := New(":0", 10, mockNode, m, slog.Default())
+	m := metrics.New(10, 300)
+	p := New(":0", 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
 
 	serverConn, clientConn := newTestConnPair(t)
-	client := NewClient(clientConn, slog.Default(), m, func([]byte) {}, func(*Client) {})
+	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -547,9 +583,6 @@ func TestReplayCachedConfig_NonceSubstitution(t *testing.T) {
 
 	clientNonce := uint32(69420)
 	p.replayCachedConfig(client, clientNonce)
-
-	// Give writeLoop time to drain the send channel.
-	time.Sleep(100 * time.Millisecond)
 
 	// Read all frames from the server side and find ConfigCompleteId.
 	var foundNonce uint32
@@ -584,19 +617,17 @@ func TestReplayCachedConfig_ConfigOnly(t *testing.T) {
 	cache := buildTestCache(t, myNum, otherNums)
 	mockNode := newMockNodeConn(cache)
 
-	m := metrics.New(10)
-	p := New(":0", 10, mockNode, m, slog.Default())
+	m := metrics.New(10, 300)
+	p := New(":0", 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
 
 	serverConn, clientConn := newTestConnPair(t)
-	client := NewClient(clientConn, slog.Default(), m, func([]byte) {}, func(*Client) {})
+	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	client.Start(ctx)
 
 	p.replayCachedConfig(client, nonceOnlyConfig)
-
-	time.Sleep(100 * time.Millisecond)
 
 	// Collect all frames.
 	var frames [][]byte
@@ -628,19 +659,17 @@ func TestReplayCachedConfig_NodesOnly(t *testing.T) {
 	cache := buildTestCache(t, myNum, otherNums)
 	mockNode := newMockNodeConn(cache)
 
-	m := metrics.New(10)
-	p := New(":0", 10, mockNode, m, slog.Default())
+	m := metrics.New(10, 300)
+	p := New(":0", 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
 
 	serverConn, clientConn := newTestConnPair(t)
-	client := NewClient(clientConn, slog.Default(), m, func([]byte) {}, func(*Client) {})
+	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	client.Start(ctx)
 
 	p.replayCachedConfig(client, nonceOnlyNodes)
-
-	time.Sleep(100 * time.Millisecond)
 
 	var frames [][]byte
 	for {
@@ -670,19 +699,17 @@ func TestReplayCachedConfig_NodesOnly(t *testing.T) {
 func TestReplayCachedConfig_EmptyCache(t *testing.T) {
 	mockNode := newMockNodeConn(nil) // empty cache
 
-	m := metrics.New(10)
-	p := New(":0", 10, mockNode, m, slog.Default())
+	m := metrics.New(10, 300)
+	p := New(":0", 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
 
 	serverConn, clientConn := newTestConnPair(t)
-	client := NewClient(clientConn, slog.Default(), m, func([]byte) {}, func(*Client) {})
+	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	client.Start(ctx)
 
 	p.replayCachedConfig(client, 12345)
-
-	time.Sleep(100 * time.Millisecond)
 
 	// Should receive no frames.
 	_ = serverConn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
@@ -702,12 +729,12 @@ func TestReplayCachedConfig_ClientDisconnect(t *testing.T) {
 	cache := buildTestCache(t, myNum, others)
 	mockNode := newMockNodeConn(cache)
 
-	m := metrics.New(10)
-	p := New(":0", 10, mockNode, m, slog.Default())
+	m := metrics.New(10, 300)
+	p := New(":0", 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
 
 	_, clientConn := newTestConnPair(t)
 	closeCalled := make(chan struct{})
-	client := NewClient(clientConn, slog.Default(), m, func([]byte) {}, func(*Client) {
+	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {
 		close(closeCalled)
 	})
 
@@ -733,8 +760,8 @@ func TestInterception_WantConfigIdNotForwarded(t *testing.T) {
 	cache := buildTestCache(t, myNum, nil)
 	mockNode := newMockNodeConn(cache)
 
-	m := metrics.New(10)
-	p := New(":0", 10, mockNode, m, slog.Default())
+	m := metrics.New(10, 300)
+	p := New(":0", 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
 
 	// Use handleNewConnection which sets up the interception callback.
 	serverConn, clientConn := newTestConnPair(t)
@@ -745,8 +772,8 @@ func TestInterception_WantConfigIdNotForwarded(t *testing.T) {
 
 	p.handleNewConnection(ctx, clientConn)
 
-	// Give time for the client loops to start.
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the client to be registered.
+	waitFor(t, 2*time.Second, func() bool { return p.Clients() == 1 }, "client was not registered")
 
 	// Send want_config_id from the "client" (server side writes to the proxy client).
 	wantConfig := marshalToRadio(t, &pb.ToRadio{
@@ -756,8 +783,20 @@ func TestInterception_WantConfigIdNotForwarded(t *testing.T) {
 		t.Fatalf("write want_config_id: %v", err)
 	}
 
-	// Give time for interception + replayCachedConfig.
-	time.Sleep(200 * time.Millisecond)
+	// Client should have received config frames from replay.
+	// ReadFrame with deadline acts as synchronization — no sleep needed.
+	var replayedFrames int
+	for {
+		_ = serverConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, err := protocol.ReadFrame(serverConn)
+		if err != nil {
+			break
+		}
+		replayedFrames++
+	}
+	if replayedFrames == 0 {
+		t.Error("client received no frames from config replay after want_config_id")
+	}
 
 	// The want_config_id should NOT have been forwarded to the node.
 	sent := mockNode.Sent()
@@ -770,27 +809,13 @@ func TestInterception_WantConfigIdNotForwarded(t *testing.T) {
 			t.Error("want_config_id was forwarded to node — should have been intercepted")
 		}
 	}
-
-	// Client should have received config frames from replay.
-	var replayedFrames int
-	for {
-		_ = serverConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		_, err := protocol.ReadFrame(serverConn)
-		if err != nil {
-			break
-		}
-		replayedFrames++
-	}
-	if replayedFrames == 0 {
-		t.Error("client received no frames from config replay after want_config_id")
-	}
 }
 
 func TestInterception_DisconnectNotForwarded(t *testing.T) {
 	mockNode := newMockNodeConn(nil) // no cache needed for disconnect test
 
-	m := metrics.New(10)
-	p := New(":0", 10, mockNode, m, slog.Default())
+	m := metrics.New(10, 300)
+	p := New(":0", 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
 
 	serverConn, clientConn := newTestConnPair(t)
 
@@ -799,7 +824,7 @@ func TestInterception_DisconnectNotForwarded(t *testing.T) {
 
 	p.handleNewConnection(ctx, clientConn)
 
-	time.Sleep(50 * time.Millisecond)
+	waitFor(t, 2*time.Second, func() bool { return p.Clients() == 1 }, "client was not registered")
 
 	// Send disconnect from the "client".
 	disconnect := marshalToRadio(t, &pb.ToRadio{
@@ -809,7 +834,8 @@ func TestInterception_DisconnectNotForwarded(t *testing.T) {
 		t.Fatalf("write disconnect: %v", err)
 	}
 
-	time.Sleep(200 * time.Millisecond)
+	// Wait for the client to be unregistered (disconnect was intercepted and processed).
+	waitFor(t, 2*time.Second, func() bool { return p.Clients() == 0 }, "client was not unregistered after disconnect")
 
 	// Disconnect should NOT have been forwarded to the node.
 	sent := mockNode.Sent()
@@ -827,8 +853,8 @@ func TestInterception_DisconnectNotForwarded(t *testing.T) {
 func TestInterception_RegularPacketForwarded(t *testing.T) {
 	mockNode := newMockNodeConn(nil)
 
-	m := metrics.New(10)
-	p := New(":0", 10, mockNode, m, slog.Default())
+	m := metrics.New(10, 300)
+	p := New(":0", 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
 
 	serverConn, clientConn := newTestConnPair(t)
 
@@ -837,7 +863,7 @@ func TestInterception_RegularPacketForwarded(t *testing.T) {
 
 	p.handleNewConnection(ctx, clientConn)
 
-	time.Sleep(50 * time.Millisecond)
+	waitFor(t, 2*time.Second, func() bool { return p.Clients() == 1 }, "client was not registered")
 
 	// Send a regular packet from the "client".
 	packet := marshalToRadio(t, &pb.ToRadio{
@@ -852,14 +878,11 @@ func TestInterception_RegularPacketForwarded(t *testing.T) {
 		t.Fatalf("write packet: %v", err)
 	}
 
-	// Give time for forwarding.
-	time.Sleep(200 * time.Millisecond)
+	// Wait for the packet to be forwarded to the node.
+	waitFor(t, 2*time.Second, func() bool { return len(mockNode.Sent()) > 0 }, "regular packet was not forwarded to node")
 
 	// Packet should have been forwarded to the node.
 	sent := mockNode.Sent()
-	if len(sent) == 0 {
-		t.Fatal("regular packet was not forwarded to node")
-	}
 
 	// Verify it's the same packet.
 	msg := &pb.ToRadio{}
@@ -869,6 +892,485 @@ func TestInterception_RegularPacketForwarded(t *testing.T) {
 	if _, ok := msg.GetPayloadVariant().(*pb.ToRadio_Packet); !ok {
 		t.Errorf("forwarded frame type = %T, want *ToRadio_Packet", msg.GetPayloadVariant())
 	}
+}
+
+// ---------------------------------------------------------------------------
+// frameTypeName tests
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// broadcast tests
+// ---------------------------------------------------------------------------
+
+func TestBroadcast_SendsToAllClients(t *testing.T) {
+	mockNode := newMockNodeConn(nil)
+	m := metrics.New(10, 300)
+	p := New(":0", 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
+
+	const numClients = 3
+	type clientPair struct {
+		client *Client
+		server net.Conn
+	}
+	pairs := make([]clientPair, numClients)
+
+	for i := 0; i < numClients; i++ {
+		serverConn, clientConn := newTestConnPair(t)
+		client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		client.Start(ctx)
+		p.registerClient(client)
+		pairs[i] = clientPair{client: client, server: serverConn}
+	}
+
+	payload := []byte("broadcast-test")
+	p.broadcast(payload)
+
+	// All clients should receive the frame.
+	for i, pair := range pairs {
+		got := readFrame(t, pair.server, 2*time.Second)
+		if string(got) != "broadcast-test" {
+			t.Errorf("client %d: got %q, want %q", i, got, "broadcast-test")
+		}
+	}
+}
+
+func TestBroadcast_NoClientsNoPanic(t *testing.T) {
+	mockNode := newMockNodeConn(nil)
+	m := metrics.New(10, 300)
+	p := New(":0", 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
+
+	// Should not panic with empty client map.
+	p.broadcast([]byte("no-clients"))
+}
+
+func TestBroadcast_SkipsSlowConsumer(t *testing.T) {
+	mockNode := newMockNodeConn(nil)
+	m := metrics.New(10, 300)
+	// Use a very small send buffer (1) to trigger slow consumer easily.
+	p := New(":0", 10, 1, 0, 50*time.Millisecond, mockNode, m, slog.Default())
+
+	_, clientConn := newTestConnPair(t)
+	closeCalled := make(chan struct{}, 1)
+	client := NewClient(clientConn, slog.Default(), m, 1, 0, func([]byte) {}, func(c *Client) {
+		select {
+		case closeCalled <- struct{}{}:
+		default:
+		}
+	})
+	// Do NOT start writeLoop — the send channel will fill up.
+	p.registerClient(client)
+
+	// First broadcast fills the buffer.
+	p.broadcast([]byte("frame1"))
+
+	// Second broadcast should trigger slow consumer disconnect (buffer full).
+	p.broadcast([]byte("frame2"))
+
+	select {
+	case <-closeCalled:
+		// Client was disconnected as expected.
+	case <-time.After(2 * time.Second):
+		t.Fatal("slow consumer was not disconnected")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// broadcastLoop tests
+// ---------------------------------------------------------------------------
+
+func TestBroadcastLoop_ForwardsFromNode(t *testing.T) {
+	mockNode := newMockNodeConn(nil)
+	m := metrics.New(10, 300)
+	p := New(":0", 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
+
+	// Register a client.
+	serverConn, clientConn := newTestConnPair(t)
+	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client.Start(ctx)
+	p.registerClient(client)
+
+	// Start broadcastLoop.
+	go p.broadcastLoop(ctx)
+
+	// Push a frame to the node's fromNode channel.
+	testPayload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From: 0x12345678,
+				To:   0xFFFFFFFF,
+			},
+		},
+	})
+	mockNode.fromNode <- testPayload
+
+	// Client should receive the frame.
+	got := readFrame(t, serverConn, 2*time.Second)
+	msg := &pb.FromRadio{}
+	if err := proto.Unmarshal(got, msg); err != nil {
+		t.Fatalf("unmarshal received frame: %v", err)
+	}
+	if _, ok := msg.GetPayloadVariant().(*pb.FromRadio_Packet); !ok {
+		t.Errorf("expected Packet variant, got %T", msg.GetPayloadVariant())
+	}
+}
+
+func TestBroadcastLoop_MultipleFrames(t *testing.T) {
+	mockNode := newMockNodeConn(nil)
+	m := metrics.New(10, 300)
+	p := New(":0", 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
+
+	serverConn, clientConn := newTestConnPair(t)
+	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client.Start(ctx)
+	p.registerClient(client)
+
+	go p.broadcastLoop(ctx)
+
+	// Send 5 frames through the node channel.
+	const numFrames = 5
+	for i := 0; i < numFrames; i++ {
+		payload := marshalFromRadio(t, &pb.FromRadio{
+			PayloadVariant: &pb.FromRadio_QueueStatus{
+				QueueStatus: &pb.QueueStatus{Free: uint32(i)},
+			},
+		})
+		mockNode.fromNode <- payload
+	}
+
+	// Read all 5 frames.
+	for i := 0; i < numFrames; i++ {
+		got := readFrame(t, serverConn, 2*time.Second)
+		msg := &pb.FromRadio{}
+		if err := proto.Unmarshal(got, msg); err != nil {
+			t.Fatalf("frame %d: unmarshal error: %v", i, err)
+		}
+		qs, ok := msg.GetPayloadVariant().(*pb.FromRadio_QueueStatus)
+		if !ok {
+			t.Fatalf("frame %d: expected QueueStatus, got %T", i, msg.GetPayloadVariant())
+		}
+		if qs.QueueStatus.GetFree() != uint32(i) {
+			t.Errorf("frame %d: Free = %d, want %d", i, qs.QueueStatus.GetFree(), i)
+		}
+	}
+}
+
+func TestBroadcastLoop_ContextCancel(t *testing.T) {
+	mockNode := newMockNodeConn(nil)
+	m := metrics.New(10, 300)
+	p := New(":0", 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan struct{})
+	go func() {
+		p.broadcastLoop(ctx)
+		close(done)
+	}()
+
+	// Cancel the context.
+	cancel()
+
+	// broadcastLoop should return promptly.
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("broadcastLoop did not return after context cancel")
+	}
+}
+
+func TestBroadcastLoop_BroadcastsToMultipleClients(t *testing.T) {
+	mockNode := newMockNodeConn(nil)
+	m := metrics.New(10, 300)
+	p := New(":0", 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	const numClients = 3
+	serverConns := make([]net.Conn, numClients)
+	for i := 0; i < numClients; i++ {
+		serverConn, clientConn := newTestConnPair(t)
+		client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+		client.Start(ctx)
+		p.registerClient(client)
+		serverConns[i] = serverConn
+	}
+
+	go p.broadcastLoop(ctx)
+
+	// Send a frame from the node.
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Rebooted{Rebooted: true},
+	})
+	mockNode.fromNode <- payload
+
+	// All clients should receive it.
+	for i, serverConn := range serverConns {
+		got := readFrame(t, serverConn, 2*time.Second)
+		msg := &pb.FromRadio{}
+		if err := proto.Unmarshal(got, msg); err != nil {
+			t.Fatalf("client %d: unmarshal error: %v", i, err)
+		}
+		if _, ok := msg.GetPayloadVariant().(*pb.FromRadio_Rebooted); !ok {
+			t.Errorf("client %d: expected Rebooted, got %T", i, msg.GetPayloadVariant())
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Proxy.Run tests
+// ---------------------------------------------------------------------------
+
+func TestRun_AcceptsConnections(t *testing.T) {
+	mockNode := newMockNodeConn(nil)
+	m := metrics.New(10, 300)
+
+	// Find a free port.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+
+	p := New(addr, 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- p.Run(ctx)
+	}()
+
+	// Connect 2 clients — dialWithRetry waits for listener to be ready.
+	conn1 := dialWithRetry(t, addr, 2*time.Second)
+	defer conn1.Close()
+
+	conn2 := dialWithRetry(t, addr, 2*time.Second)
+	defer conn2.Close()
+
+	// Wait for both clients to be registered.
+	waitFor(t, 2*time.Second, func() bool { return p.Clients() == 2 }, "expected 2 registered clients")
+
+	cancel()
+	select {
+	case err := <-runErr:
+		if err != nil {
+			t.Fatalf("Run returned error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after cancel")
+	}
+}
+
+func TestRun_MaxClientsRejected(t *testing.T) {
+	mockNode := newMockNodeConn(nil)
+	m := metrics.New(10, 300)
+
+	// Find a free port.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+
+	// maxClients = 1
+	p := New(addr, 1, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- p.Run(ctx)
+	}()
+
+	// First client should be accepted.
+	conn1 := dialWithRetry(t, addr, 2*time.Second)
+	defer conn1.Close()
+
+	waitFor(t, 2*time.Second, func() bool { return p.Clients() == 1 }, "first client was not registered")
+
+	// Second client should be rejected (connection accepted then immediately closed).
+	conn2 := dialWithRetry(t, addr, 2*time.Second)
+	defer conn2.Close()
+
+	// The rejected connection should be closed by the server.
+	// Try to read — should get EOF.
+	_ = conn2.SetReadDeadline(time.Now().Add(2 * time.Second))
+	buf := make([]byte, 1)
+	_, readErr := conn2.Read(buf)
+	if readErr == nil {
+		t.Error("expected read error on rejected connection, got nil")
+	}
+
+	// Client count should still be 1.
+	if got := p.Clients(); got != 1 {
+		t.Errorf("Clients() = %d, want 1 after rejected connection", got)
+	}
+
+	cancel()
+	<-runErr
+}
+
+func TestRun_GracefulShutdown(t *testing.T) {
+	mockNode := newMockNodeConn(nil)
+	m := metrics.New(10, 300)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+
+	p := New(addr, 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- p.Run(ctx)
+	}()
+
+	// Connect 3 clients.
+	conns := make([]net.Conn, 3)
+	for i := 0; i < 3; i++ {
+		c := dialWithRetry(t, addr, 2*time.Second)
+		conns[i] = c
+		defer c.Close()
+	}
+
+	waitFor(t, 2*time.Second, func() bool { return p.Clients() == 3 }, "expected 3 registered clients")
+
+	// Cancel context — triggers graceful shutdown.
+	cancel()
+
+	select {
+	case err := <-runErr:
+		if err != nil {
+			t.Fatalf("Run returned error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after graceful shutdown")
+	}
+
+	// All client connections should be closed by the server.
+	for i, c := range conns {
+		_ = c.SetReadDeadline(time.Now().Add(time.Second))
+		buf := make([]byte, 1)
+		_, readErr := c.Read(buf)
+		if readErr == nil {
+			t.Errorf("client %d: expected connection to be closed after shutdown", i)
+		}
+	}
+}
+
+func TestRun_BroadcastToClients(t *testing.T) {
+	// Full integration: Run starts both accept loop and broadcastLoop.
+	// Connect a client, send a frame from the node, verify the client receives it.
+	mockNode := newMockNodeConn(nil)
+	m := metrics.New(10, 300)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+
+	p := New(addr, 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- p.Run(ctx)
+	}()
+
+	// Connect a client.
+	conn := dialWithRetry(t, addr, 2*time.Second)
+	defer conn.Close()
+
+	waitFor(t, 2*time.Second, func() bool { return p.Clients() == 1 }, "client was not registered")
+
+	// Send a frame from the node — broadcastLoop should deliver it.
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From: 0xDEADBEEF,
+				To:   0xFFFFFFFF,
+			},
+		},
+	})
+	mockNode.fromNode <- payload
+
+	// Client should receive the frame.
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	received, readErr := protocol.ReadFrame(conn)
+	if readErr != nil {
+		t.Fatalf("read frame: %v", readErr)
+	}
+
+	msg := &pb.FromRadio{}
+	if err := proto.Unmarshal(received, msg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	pkt, ok := msg.GetPayloadVariant().(*pb.FromRadio_Packet)
+	if !ok {
+		t.Fatalf("expected Packet, got %T", msg.GetPayloadVariant())
+	}
+	if pkt.Packet.GetFrom() != 0xDEADBEEF {
+		t.Errorf("From = %08x, want DEADBEEF", pkt.Packet.GetFrom())
+	}
+
+	cancel()
+	<-runErr
+}
+
+func TestRun_ClientDisconnectUnregisters(t *testing.T) {
+	mockNode := newMockNodeConn(nil)
+	m := metrics.New(10, 300)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+
+	p := New(addr, 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- p.Run(ctx)
+	}()
+
+	// Connect a client.
+	conn := dialWithRetry(t, addr, 2*time.Second)
+
+	waitFor(t, 2*time.Second, func() bool { return p.Clients() == 1 }, "client was not registered")
+
+	// Disconnect the client.
+	_ = conn.Close()
+
+	// Wait for unregister to happen.
+	waitFor(t, 3*time.Second, func() bool { return p.Clients() == 0 }, "client was not unregistered after disconnect")
+
+	cancel()
+	<-runErr
 }
 
 // ---------------------------------------------------------------------------

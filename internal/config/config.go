@@ -15,6 +15,7 @@ type Config struct {
 	Web     WebConfig     `toml:"web"`
 	MDNS    MDNSConfig    `toml:"mdns"`
 	Logging LoggingConfig `toml:"logging"`
+	Metrics MetricsConfig `toml:"metrics"`
 }
 
 // NodeConfig holds settings for the upstream Meshtastic node connection.
@@ -22,12 +23,25 @@ type NodeConfig struct {
 	Address              string   `toml:"address"`
 	ReconnectInterval    Duration `toml:"reconnect_interval"`
 	MaxReconnectInterval Duration `toml:"max_reconnect_interval"`
+	DialTimeout          Duration `toml:"dial_timeout"`
+	ReadTimeout          Duration `toml:"read_timeout"`
+	FromBuffer           int      `toml:"from_buffer"`
+	ToBuffer             int      `toml:"to_buffer"`
 }
 
 // ProxyConfig holds settings for the client-facing TCP listener.
 type ProxyConfig struct {
-	Listen     string `toml:"listen"`
-	MaxClients int    `toml:"max_clients"`
+	Listen            string   `toml:"listen"`
+	MaxClients        int      `toml:"max_clients"`
+	ClientSendBuffer  int      `toml:"client_send_buffer"`
+	ClientIdleTimeout Duration `toml:"client_idle_timeout"`
+	IOSNodeInfoDelay  Duration `toml:"ios_nodeinfo_delay"`
+}
+
+// MetricsConfig holds settings for the metrics collector.
+type MetricsConfig struct {
+	MaxMessages       int `toml:"max_messages"`
+	MaxTrafficSamples int `toml:"max_traffic_samples"`
 }
 
 // WebConfig holds settings for the web dashboard.
@@ -80,10 +94,17 @@ func DefaultConfig() *Config {
 			Address:              "localhost:4403",
 			ReconnectInterval:    Duration{1 * time.Second},
 			MaxReconnectInterval: Duration{30 * time.Second},
+			DialTimeout:          Duration{10 * time.Second},
+			ReadTimeout:          Duration{5 * time.Minute},
+			FromBuffer:           256,
+			ToBuffer:             64,
 		},
 		Proxy: ProxyConfig{
-			Listen:     ":4404",
-			MaxClients: 10,
+			Listen:            ":4404",
+			MaxClients:        10,
+			ClientSendBuffer:  256,
+			ClientIdleTimeout: Duration{30 * time.Minute},
+			IOSNodeInfoDelay:  Duration{50 * time.Millisecond},
 		},
 		Web: WebConfig{
 			Listen:  ":8080",
@@ -98,10 +119,15 @@ func DefaultConfig() *Config {
 			Level:  "info",
 			Format: "text",
 		},
+		Metrics: MetricsConfig{
+			MaxMessages:       200,
+			MaxTrafficSamples: 300,
+		},
 	}
 }
 
 // Load reads a TOML configuration file and merges it with defaults.
+// Environment variables override TOML values when set.
 func Load(path string) (*Config, error) {
 	cfg := DefaultConfig()
 
@@ -114,11 +140,35 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parsing config file: %w", err)
 	}
 
+	applyEnvOverrides(cfg)
+
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
 
 	return cfg, nil
+}
+
+// applyEnvOverrides applies environment variable overrides to the config.
+// Supported variables:
+//
+//	MESHTASTIC_NODE_ADDRESS  -> node.address
+//	MESHTASTIC_PROXY_LISTEN  -> proxy.listen
+//	MESHTASTIC_WEB_LISTEN    -> web.listen
+//	MESHTASTIC_LOG_LEVEL     -> logging.level
+func applyEnvOverrides(cfg *Config) {
+	if v := os.Getenv("MESHTASTIC_NODE_ADDRESS"); v != "" {
+		cfg.Node.Address = v
+	}
+	if v := os.Getenv("MESHTASTIC_PROXY_LISTEN"); v != "" {
+		cfg.Proxy.Listen = v
+	}
+	if v := os.Getenv("MESHTASTIC_WEB_LISTEN"); v != "" {
+		cfg.Web.Listen = v
+	}
+	if v := os.Getenv("MESHTASTIC_LOG_LEVEL"); v != "" {
+		cfg.Logging.Level = v
+	}
 }
 
 // Validate checks that the configuration values are valid.
@@ -132,11 +182,53 @@ func (c *Config) Validate() error {
 	if c.Proxy.MaxClients < 1 {
 		return fmt.Errorf("proxy.max_clients must be at least 1")
 	}
+	if c.Proxy.ClientSendBuffer < 1 {
+		return fmt.Errorf("proxy.client_send_buffer must be at least 1")
+	}
+	if c.Proxy.ClientIdleTimeout.Duration < 0 {
+		return fmt.Errorf("proxy.client_idle_timeout must not be negative")
+	}
+	if c.Proxy.IOSNodeInfoDelay.Duration < 0 {
+		return fmt.Errorf("proxy.ios_nodeinfo_delay must not be negative")
+	}
 	if c.Node.ReconnectInterval.Duration < 100*time.Millisecond {
 		return fmt.Errorf("node.reconnect_interval must be at least 100ms")
 	}
 	if c.Node.MaxReconnectInterval.Duration < c.Node.ReconnectInterval.Duration {
 		return fmt.Errorf("node.max_reconnect_interval must be >= reconnect_interval")
+	}
+	if c.Node.DialTimeout.Duration < 0 {
+		return fmt.Errorf("node.dial_timeout must not be negative")
+	}
+	if c.Node.ReadTimeout.Duration < 0 {
+		return fmt.Errorf("node.read_timeout must not be negative")
+	}
+	if c.Node.FromBuffer < 1 {
+		return fmt.Errorf("node.from_buffer must be at least 1")
+	}
+	if c.Node.ToBuffer < 1 {
+		return fmt.Errorf("node.to_buffer must be at least 1")
+	}
+	if c.Web.Enabled && c.Web.Listen == "" {
+		return fmt.Errorf("web.listen is required when web is enabled")
+	}
+	switch c.Logging.Level {
+	case "debug", "info", "warn", "error":
+		// valid
+	default:
+		return fmt.Errorf("logging.level must be one of: debug, info, warn, error (got %q)", c.Logging.Level)
+	}
+	switch c.Logging.Format {
+	case "text", "json":
+		// valid
+	default:
+		return fmt.Errorf("logging.format must be one of: text, json (got %q)", c.Logging.Format)
+	}
+	if c.Metrics.MaxMessages < 1 {
+		return fmt.Errorf("metrics.max_messages must be at least 1")
+	}
+	if c.Metrics.MaxTrafficSamples < 1 {
+		return fmt.Errorf("metrics.max_traffic_samples must be at least 1")
 	}
 	if c.MDNS.Enabled {
 		if c.MDNS.Instance == "" {

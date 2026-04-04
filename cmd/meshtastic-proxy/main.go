@@ -41,7 +41,7 @@ func main() {
 	defer cancel()
 
 	// Create metrics collector
-	m := metrics.New(200)
+	m := metrics.New(cfg.Metrics.MaxMessages, cfg.Metrics.MaxTrafficSamples)
 	m.NodeAddress = cfg.Node.Address
 
 	// Start traffic sampler (1s interval, ring buffer for charts)
@@ -52,6 +52,10 @@ func main() {
 		cfg.Node.Address,
 		cfg.Node.ReconnectInterval.Duration,
 		cfg.Node.MaxReconnectInterval.Duration,
+		cfg.Node.DialTimeout.Duration,
+		cfg.Node.ReadTimeout.Duration,
+		cfg.Node.FromBuffer,
+		cfg.Node.ToBuffer,
 		m,
 		logger.With("component", "node"),
 	)
@@ -60,6 +64,9 @@ func main() {
 	proxyHub := proxy.New(
 		cfg.Proxy.Listen,
 		cfg.Proxy.MaxClients,
+		cfg.Proxy.ClientSendBuffer,
+		cfg.Proxy.ClientIdleTimeout.Duration,
+		cfg.Proxy.IOSNodeInfoDelay.Duration,
 		nodeConn,
 		m,
 		logger.With("component", "proxy"),

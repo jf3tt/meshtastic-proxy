@@ -1,21 +1,36 @@
 package proxy
 
 import (
+	"bufio"
 	"context"
 	"log/slog"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/jfett/meshtastic-proxy/internal/metrics"
 	"github.com/jfett/meshtastic-proxy/internal/protocol"
 )
 
+// DisconnectReason describes why a client disconnected.
+type DisconnectReason string
+
+const (
+	DisconnectReasonReadError    DisconnectReason = "read_error"
+	DisconnectReasonIdleTimeout  DisconnectReason = "idle_timeout"
+	DisconnectReasonSlowConsumer DisconnectReason = "slow_consumer"
+	DisconnectReasonClientSent   DisconnectReason = "client_disconnect" // client sent ToRadio.Disconnect
+	DisconnectReasonServerClose  DisconnectReason = "server_close"      // proxy shutdown or max clients
+)
+
 // Client represents a single connected TCP client.
 type Client struct {
-	conn   net.Conn
-	addr   string
-	logger *slog.Logger
-	m      *metrics.Metrics
+	conn        net.Conn
+	addr        string
+	logger      *slog.Logger
+	m           *metrics.Metrics
+	idleTimeout time.Duration
+	connectedAt time.Time
 
 	// send is a buffered channel for outgoing frames to this client
 	send chan []byte
@@ -33,24 +48,52 @@ type Client struct {
 
 	// cancel stops the read/write loops.
 	cancel context.CancelFunc
+
+	// disconnectReason records why this client was disconnected.
+	disconnectMu     sync.Mutex
+	disconnectReason DisconnectReason
 }
 
 // NewClient creates a new client handler.
-func NewClient(conn net.Conn, logger *slog.Logger, m *metrics.Metrics, onMessage func([]byte), onClose func(*Client)) *Client {
+func NewClient(conn net.Conn, logger *slog.Logger, m *metrics.Metrics, sendBuffer int, idleTimeout time.Duration, onMessage func([]byte), onClose func(*Client)) *Client {
 	return &Client{
-		conn:      conn,
-		addr:      conn.RemoteAddr().String(),
-		logger:    logger.With("client", conn.RemoteAddr().String()),
-		m:         m,
-		send:      make(chan []byte, 256),
-		onMessage: onMessage,
-		onClose:   onClose,
+		conn:        conn,
+		addr:        conn.RemoteAddr().String(),
+		logger:      logger.With("client", conn.RemoteAddr().String()),
+		m:           m,
+		idleTimeout: idleTimeout,
+		connectedAt: time.Now(),
+		send:        make(chan []byte, sendBuffer),
+		onMessage:   onMessage,
+		onClose:     onClose,
 	}
 }
 
 // Addr returns the remote address of the client.
 func (c *Client) Addr() string {
 	return c.addr
+}
+
+// SetDisconnectReason records the reason for disconnect. Only the first
+// call takes effect (subsequent calls are ignored).
+func (c *Client) SetDisconnectReason(reason DisconnectReason) {
+	c.disconnectMu.Lock()
+	defer c.disconnectMu.Unlock()
+	if c.disconnectReason == "" {
+		c.disconnectReason = reason
+	}
+}
+
+// GetDisconnectReason returns the recorded disconnect reason.
+func (c *Client) GetDisconnectReason() DisconnectReason {
+	c.disconnectMu.Lock()
+	defer c.disconnectMu.Unlock()
+	return c.disconnectReason
+}
+
+// SessionDuration returns the time elapsed since the client connected.
+func (c *Client) SessionDuration() time.Duration {
+	return time.Since(c.connectedAt)
 }
 
 // Send queues a frame for delivery to the client.
@@ -61,6 +104,7 @@ func (c *Client) Send(payload []byte) bool {
 		return true
 	default:
 		c.logger.Warn("client send buffer full, disconnecting slow consumer")
+		c.SetDisconnectReason(DisconnectReasonSlowConsumer)
 		c.Close()
 		return false
 	}
@@ -116,6 +160,9 @@ func (c *Client) Run(ctx context.Context) {
 }
 
 func (c *Client) readLoop(ctx context.Context) {
+	// Wrap connection in a buffered reader to reduce syscall overhead.
+	br := bufio.NewReaderSize(c.conn, 4096)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -123,10 +170,23 @@ func (c *Client) readLoop(ctx context.Context) {
 		default:
 		}
 
-		payload, err := protocol.ReadFrame(c.conn)
+		// Set read deadline to detect idle clients (phone sleeps, WiFi drops).
+		// A value of 0 disables the idle timeout.
+		if c.idleTimeout > 0 {
+			_ = c.conn.SetReadDeadline(time.Now().Add(c.idleTimeout))
+		}
+
+		payload, err := protocol.ReadFrame(br)
 		if err != nil {
 			if ctx.Err() == nil {
-				c.logger.Debug("client read error", "error", err)
+				// Determine disconnect reason from the error type.
+				if ne, ok := err.(net.Error); ok && ne.Timeout() {
+					c.SetDisconnectReason(DisconnectReasonIdleTimeout)
+					c.logger.Debug("client idle timeout", "error", err)
+				} else {
+					c.SetDisconnectReason(DisconnectReasonReadError)
+					c.logger.Debug("client read error", "error", err)
+				}
 			}
 			return
 		}

@@ -55,13 +55,13 @@ spec:
               memory: 64Mi
           livenessProbe:
             httpGet:
-              path: /
+              path: /healthz
               port: web
             initialDelaySeconds: 5
             periodSeconds: 30
           readinessProbe:
             httpGet:
-              path: /
+              path: /readyz
               port: web
             initialDelaySeconds: 2
             periodSeconds: 10
