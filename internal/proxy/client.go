@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"context"
+	"errors"
 	"log/slog"
 	"net"
 	"sync"
@@ -171,7 +172,8 @@ func (c *Client) readLoop(ctx context.Context) {
 		if err != nil {
 			if ctx.Err() == nil {
 				// Determine disconnect reason from the error type.
-				if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				var ne net.Error
+				if errors.As(err, &ne) && ne.Timeout() {
 					c.SetDisconnectReason(DisconnectReasonIdleTimeout)
 					c.logger.Debug("client idle timeout", "error", err)
 				} else {

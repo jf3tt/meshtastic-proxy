@@ -3,15 +3,15 @@
 # Install with: make install-hooks
 set -e
 
-# Auto-detect Go 1.23+ binary (mirrors Makefile logic)
-if go version 2>/dev/null | grep -qE 'go1\.(2[3-9]|[3-9][0-9])'; then
+# Auto-detect Go 1.24+ binary (mirrors Makefile logic)
+if go version 2>/dev/null | grep -qE 'go1\.(2[4-9]|[3-9][0-9])'; then
     GO=go
-elif command -v go1.23.0 &>/dev/null; then
-    GO=go1.23.0
-elif [ -x "${HOME}/sdk/go1.23.0/bin/go" ]; then
-    GO="${HOME}/sdk/go1.23.0/bin/go"
-elif [ -x "${HOME}/go/bin/go1.23.0" ]; then
-    GO="${HOME}/go/bin/go1.23.0"
+elif command -v go1.24.0 &>/dev/null; then
+    GO=go1.24.0
+elif [ -x "${HOME}/sdk/go1.24.0/bin/go" ]; then
+    GO="${HOME}/sdk/go1.24.0/bin/go"
+elif [ -x "${HOME}/go/bin/go1.24.0" ]; then
+    GO="${HOME}/go/bin/go1.24.0"
 else
     GO=go
 fi

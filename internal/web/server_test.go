@@ -11,9 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jfett/meshtastic-proxy/internal/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"github.com/jfett/meshtastic-proxy/internal/metrics"
 )
 
 // ---------------------------------------------------------------------------

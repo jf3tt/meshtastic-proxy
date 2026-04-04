@@ -1,14 +1,14 @@
-.PHONY: build run test lint clean docker docker-up docker-down tidy setup install-hooks css
+.PHONY: build run test lint security clean docker docker-up docker-down tidy setup install-hooks css
 
 BINARY := meshtastic-proxy
 BUILD_DIR := ./bin
 
-# Auto-detect Go 1.23+ binary
+# Auto-detect Go 1.24+ binary
 GO := $(shell \
-	if go version 2>/dev/null | grep -qE 'go1\.(2[3-9]|[3-9][0-9])'; then echo go; \
-	elif command -v go1.23.0 >/dev/null 2>&1; then echo go1.23.0; \
-	elif [ -x "$(HOME)/sdk/go1.23.0/bin/go" ]; then echo "$(HOME)/sdk/go1.23.0/bin/go"; \
-	elif [ -x "$(HOME)/go/bin/go1.23.0" ]; then echo "$(HOME)/go/bin/go1.23.0"; \
+	if go version 2>/dev/null | grep -qE 'go1\.(2[4-9]|[3-9][0-9])'; then echo go; \
+	elif command -v go1.24.0 >/dev/null 2>&1; then echo go1.24.0; \
+	elif [ -x "$(HOME)/sdk/go1.24.0/bin/go" ]; then echo "$(HOME)/sdk/go1.24.0/bin/go"; \
+	elif [ -x "$(HOME)/go/bin/go1.24.0" ]; then echo "$(HOME)/go/bin/go1.24.0"; \
 	else echo go; \
 	fi)
 
@@ -35,6 +35,11 @@ else
 	@echo "golangci-lint not installed, skipping (https://golangci-lint.run/usage/install/)"
 endif
 
+security: build
+	@echo "Running security checks..."
+	-$(GO) run golang.org/x/vuln/cmd/govulncheck@latest -mode binary $(BUILD_DIR)/$(BINARY)
+	$(GO) run github.com/securego/gosec/v2/cmd/gosec@latest -quiet -exclude=G115,G118,G203,G304 ./...
+
 clean:
 	rm -rf $(BUILD_DIR)
 
@@ -50,16 +55,16 @@ docker-down:
 tidy:
 	$(GO) mod tidy
 
-# Install Go 1.23.0 if not available
+# Install Go 1.24.0 if not available
 setup:
-	@if ! $(GO) version 2>/dev/null | grep -qE 'go1\.(2[3-9]|[3-9][0-9])'; then \
-		echo "Go 1.23+ not found. Installing go1.23.0..."; \
-		GOTOOLCHAIN=local go install golang.org/dl/go1.23.0@latest; \
-		$(HOME)/go/bin/go1.23.0 download; \
-		echo "Done. go1.23.0 installed to $(HOME)/sdk/go1.23.0"; \
+	@if ! $(GO) version 2>/dev/null | grep -qE 'go1\.(2[4-9]|[3-9][0-9])'; then \
+		echo "Go 1.24+ not found. Installing go1.24.0..."; \
+		GOTOOLCHAIN=local go install golang.org/dl/go1.24.0@latest; \
+		$(HOME)/go/bin/go1.24.0 download; \
+		echo "Done. go1.24.0 installed to $(HOME)/sdk/go1.24.0"; \
 		echo "Run 'make build' to build the project."; \
 	else \
-		echo "Go 1.23+ already available: $$($(GO) version)"; \
+		echo "Go 1.24+ already available: $$($(GO) version)"; \
 	fi
 
 # Install git pre-commit hook (runs vet + test + lint before each commit)

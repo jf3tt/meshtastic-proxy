@@ -22,16 +22,36 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version: "1.24"
           cache: true
 
       - name: Run tests
         run: go test -v -race ./...
 
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+
+      - name: Go vet
+        run: go vet ./...
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          args: --timeout=5m
+
   release-binaries:
     name: Release binaries
     runs-on: ubuntu-latest
-    needs: [test]
+    needs: [lint, test]
     strategy:
       matrix:
         goos: [linux, darwin]
@@ -41,7 +61,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version: "1.24"
           cache: true
 
       - name: Build binary
@@ -61,7 +81,7 @@ jobs:
   release-docker:
     name: Docker build & push
     runs-on: ubuntu-latest
-    needs: [test]
+    needs: [lint, test]
     steps:
       - uses: actions/checkout@v4
 

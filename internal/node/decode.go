@@ -6,8 +6,9 @@ import (
 	"strings"
 
 	pb "buf.build/gen/go/meshtastic/protobufs/protocolbuffers/go/meshtastic"
-	"github.com/jfett/meshtastic-proxy/internal/metrics"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/jfett/meshtastic-proxy/internal/metrics"
 )
 
 // ---------------------------------------------------------------------------

@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"testing"
 )
@@ -198,7 +199,7 @@ func TestMultipleFrames(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error after all frames read")
 	}
-	if err != io.EOF && !bytes.Contains([]byte(err.Error()), []byte("EOF")) {
+	if !errors.Is(err, io.EOF) && !bytes.Contains([]byte(err.Error()), []byte("EOF")) {
 		t.Fatalf("expected EOF-related error, got: %v", err)
 	}
 }

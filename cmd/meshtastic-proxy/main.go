@@ -9,13 +9,14 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
 	"github.com/jfett/meshtastic-proxy/internal/config"
 	"github.com/jfett/meshtastic-proxy/internal/discovery"
 	"github.com/jfett/meshtastic-proxy/internal/metrics"
 	"github.com/jfett/meshtastic-proxy/internal/node"
 	"github.com/jfett/meshtastic-proxy/internal/proxy"
 	"github.com/jfett/meshtastic-proxy/internal/web"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {

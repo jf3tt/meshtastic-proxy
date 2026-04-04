@@ -187,10 +187,10 @@ func (a *Advertiser) startServer(iface *net.Interface) (*mdns.Server, error) {
 	return server, nil
 }
 
-// Run starts the mDNS server(s) and blocks until the context is cancelled.
+// Run starts the mDNS server(s) and blocks until the context is canceled.
 // When Interfaces are configured, a separate mDNS server is started for each
 // interface. When no interfaces are specified, a single server with
-// auto-detected settings is used (original behaviour).
+// auto-detected settings is used (original behavior).
 // On context cancellation all servers are shut down gracefully.
 func (a *Advertiser) Run(ctx context.Context) error {
 	a.mu.Lock()
@@ -223,7 +223,7 @@ func (a *Advertiser) Run(ctx context.Context) error {
 	}
 	a.mu.Unlock()
 
-	// Block until context is cancelled.
+	// Block until context is canceled.
 	<-ctx.Done()
 
 	a.logger.Info("stopping mDNS advertisement")

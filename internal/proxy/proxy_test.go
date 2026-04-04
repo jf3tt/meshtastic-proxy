@@ -9,10 +9,11 @@ import (
 	"time"
 
 	pb "buf.build/gen/go/meshtastic/protobufs/protocolbuffers/go/meshtastic"
+	"google.golang.org/protobuf/proto"
+
 	"github.com/jfett/meshtastic-proxy/internal/metrics"
 	"github.com/jfett/meshtastic-proxy/internal/node"
 	"github.com/jfett/meshtastic-proxy/internal/protocol"
-	"google.golang.org/protobuf/proto"
 )
 
 // ---------------------------------------------------------------------------

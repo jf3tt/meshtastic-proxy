@@ -10,9 +10,10 @@ import (
 	"time"
 
 	pb "buf.build/gen/go/meshtastic/protobufs/protocolbuffers/go/meshtastic"
+	"google.golang.org/protobuf/proto"
+
 	"github.com/jfett/meshtastic-proxy/internal/metrics"
 	"github.com/jfett/meshtastic-proxy/internal/protocol"
-	"google.golang.org/protobuf/proto"
 )
 
 // Connection manages a persistent TCP connection to a Meshtastic node
@@ -102,7 +103,7 @@ func (c *Connection) ConfigCache() [][]byte {
 }
 
 // Run starts the connection manager. It connects to the node, reads frames,
-// and handles reconnection. It blocks until the context is cancelled.
+// and handles reconnection. It blocks until the context is canceled.
 func (c *Connection) Run(ctx context.Context) {
 	backoff := c.reconnectInterval
 	firstConnect := true

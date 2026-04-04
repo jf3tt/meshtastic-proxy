@@ -1,0 +1,95 @@
+# golangci-lint v2 configuration
+# https://golangci-lint.run/docs/configuration/file/
+version: "2"
+
+linters:
+  default: none
+  enable:
+    # Default linters
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck  # includes gosimple and stylecheck in v2
+    - unused
+
+    # Code quality
+    - misspell
+
+    # Bug detection
+    - bodyclose
+    - nilerr
+    - errorlint
+
+    # Security
+    - gosec
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment  # too noisy for this project
+
+    misspell:
+      locale: US
+
+    errorlint:
+      errorf: true
+      asserts: true
+      comparison: true
+
+    gosec:
+      severity: medium
+      confidence: medium
+
+  exclusions:
+    rules:
+      # Allow fmt.Fprintf to stderr in main (CLI error output)
+      - path: cmd/meshtastic-proxy/main.go
+        linters:
+          - errcheck
+        text: "fmt.Fprintf"
+
+      # Test files are more relaxed
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+          - bodyclose
+
+      # govet shadow in test files produces too many false positives
+      # (e.g. err := in subtests, re-declared loop vars)
+      - path: _test\.go
+        linters:
+          - govet
+        text: "shadow"
+
+      # G304: config file path comes from CLI flag, not user input
+      - path: internal/config/config\.go
+        linters:
+          - gosec
+        text: "G304"
+
+      # G115: integer overflow checks — length is already validated against MaxFrameSize (512)
+      - path: internal/protocol/frame\.go
+        linters:
+          - gosec
+        text: "G115"
+
+      # G118: intentional goroutine with context.Background for HTTP server graceful shutdown
+      - path: internal/web/server\.go
+        linters:
+          - gosec
+        text: "G118"
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/jfett/meshtastic-proxy

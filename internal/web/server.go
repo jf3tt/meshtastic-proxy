@@ -123,7 +123,7 @@ func (s *Server) buildMux() *http.ServeMux {
 	return mux
 }
 
-// Run starts the HTTP server. Blocks until the context is cancelled.
+// Run starts the HTTP server. Blocks until the context is canceled.
 func (s *Server) Run(ctx context.Context) error {
 	mux := s.buildMux()
 

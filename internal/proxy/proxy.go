@@ -9,9 +9,10 @@ import (
 	"time"
 
 	pb "buf.build/gen/go/meshtastic/protobufs/protocolbuffers/go/meshtastic"
+	"google.golang.org/protobuf/proto"
+
 	"github.com/jfett/meshtastic-proxy/internal/metrics"
 	"github.com/jfett/meshtastic-proxy/internal/node"
-	"google.golang.org/protobuf/proto"
 )
 
 // Special nonces used by the iOS Meshtastic app to request partial config.
@@ -74,7 +75,7 @@ func New(opts Options) *Proxy {
 }
 
 // Run starts the proxy. It listens for client connections and
-// broadcasts node frames to all connected clients. Blocks until ctx is cancelled.
+// broadcasts node frames to all connected clients. Blocks until ctx is canceled.
 func (p *Proxy) Run(ctx context.Context) error {
 	// Start the broadcast pump in background
 	go p.broadcastLoop(ctx)
@@ -306,7 +307,10 @@ func (p *Proxy) replayCachedConfig(c *Client, clientNonce uint32) {
 
 			if _, ok := pf.Msg.GetPayloadVariant().(*pb.FromRadio_ConfigCompleteId); ok {
 				// Replace nonce with the client's nonce.
-				patched := proto.Clone(pf.Msg).(*pb.FromRadio)
+				patched, ok := proto.Clone(pf.Msg).(*pb.FromRadio)
+				if !ok {
+					continue
+				}
 				patched.PayloadVariant = &pb.FromRadio_ConfigCompleteId{
 					ConfigCompleteId: clientNonce,
 				}

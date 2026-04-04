@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -10,9 +11,10 @@ import (
 	"time"
 
 	pb "buf.build/gen/go/meshtastic/protobufs/protocolbuffers/go/meshtastic"
+	"google.golang.org/protobuf/proto"
+
 	"github.com/jfett/meshtastic-proxy/internal/metrics"
 	"github.com/jfett/meshtastic-proxy/internal/protocol"
-	"google.golang.org/protobuf/proto"
 )
 
 // ---------------------------------------------------------------------------
@@ -544,7 +546,7 @@ func TestReadLoop_ContextCancel(t *testing.T) {
 	select {
 	case err := <-errCh:
 		// Acceptable: either context.Canceled or a read error after Close.
-		if err != nil && err != context.Canceled {
+		if err != nil && !errors.Is(err, context.Canceled) {
 			t.Logf("readLoop returned non-cancel error (acceptable): %v", err)
 		}
 	case <-time.After(2 * time.Second):
@@ -600,7 +602,7 @@ func TestWriteLoop_ContextCancel(t *testing.T) {
 
 	select {
 	case err := <-errCh:
-		if err != context.Canceled {
+		if !errors.Is(err, context.Canceled) {
 			t.Errorf("writeLoop error = %v, want context.Canceled", err)
 		}
 	case <-time.After(2 * time.Second):

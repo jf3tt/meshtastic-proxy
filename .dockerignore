@@ -1,0 +1,32 @@
+# Version control
+.git
+.gitignore
+.githooks
+
+# CI/CD
+.github
+
+# Build artifacts
+bin/
+
+# Kubernetes manifests
+deploy/
+
+# Documentation
+*.md
+LICENSE
+
+# Development config (example is copied in Dockerfile)
+config.toml
+docker-compose.yml
+
+# Editor and OS files
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Lint config (not needed at runtime)
+.golangci.yml
