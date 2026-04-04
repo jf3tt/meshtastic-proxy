@@ -8,6 +8,12 @@ import (
 	"time"
 )
 
+// NodeEntry stores identity information for a single mesh node.
+type NodeEntry struct {
+	ShortName string `json:"short_name"`
+	LongName  string `json:"long_name"`
+}
+
 // MessageRecord stores information about a proxied message.
 type MessageRecord struct {
 	Timestamp time.Time `json:"timestamp"`
@@ -93,6 +99,11 @@ type Metrics struct {
 	// Message type counters for doughnut chart
 	typeMu     sync.RWMutex
 	typeCounts map[string]int64
+
+	// Node directory (populated from config cache NodeInfo frames)
+	nodeDirMu sync.RWMutex
+	nodeDir   map[uint32]NodeEntry // full node number → identity
+	relayDir  map[uint8][]uint32   // last byte → list of full node numbers
 
 	// Pub/sub for SSE
 	subMu       sync.RWMutex
@@ -199,6 +210,54 @@ func (m *Metrics) ConfigCacheAge() time.Duration {
 // the node is connected and the config cache is non-empty.
 func (m *Metrics) Ready() bool {
 	return m.NodeConnected.Load() && m.ConfigCacheFrames.Load() > 0
+}
+
+// SetNodeDirectory replaces the node directory with the given map and rebuilds
+// the relay lookup index. It also publishes a "node_directory" SSE event.
+func (m *Metrics) SetNodeDirectory(dir map[uint32]NodeEntry) {
+	relay := make(map[uint8][]uint32, len(dir))
+	for num := range dir {
+		key := uint8(num & 0xFF)
+		relay[key] = append(relay[key], num)
+	}
+
+	m.nodeDirMu.Lock()
+	m.nodeDir = dir
+	m.relayDir = relay
+	m.nodeDirMu.Unlock()
+
+	m.publish(Event{Type: "node_directory", Data: dir})
+}
+
+// NodeDirectory returns a copy of the current node directory.
+func (m *Metrics) NodeDirectory() map[uint32]NodeEntry {
+	m.nodeDirMu.RLock()
+	defer m.nodeDirMu.RUnlock()
+
+	result := make(map[uint32]NodeEntry, len(m.nodeDir))
+	for k, v := range m.nodeDir {
+		result[k] = v
+	}
+	return result
+}
+
+// ResolveRelay returns the node entries whose last byte matches the given
+// relay_node value. Returns nil if no matches are found.
+func (m *Metrics) ResolveRelay(relayByte uint8) []NodeEntry {
+	m.nodeDirMu.RLock()
+	defer m.nodeDirMu.RUnlock()
+
+	nums := m.relayDir[relayByte]
+	if len(nums) == 0 {
+		return nil
+	}
+	result := make([]NodeEntry, 0, len(nums))
+	for _, num := range nums {
+		if entry, ok := m.nodeDir[num]; ok {
+			result = append(result, entry)
+		}
+	}
+	return result
 }
 
 // RecordMessage adds a message to the log.
@@ -324,6 +383,9 @@ type Snapshot struct {
 
 	// Configured limits (for JS to use)
 	MaxTrafficSamples int `json:"max_traffic_samples"`
+
+	// Node directory for name resolution
+	NodeDir map[uint32]NodeEntry `json:"node_dir"`
 }
 
 // counters holds a consistent reading of all atomic counters and derived values.
@@ -402,6 +464,8 @@ func (m *Metrics) Snapshot() Snapshot {
 		ConfigReplaysNodesOnly:  c.configReplaysNodesOnly,
 
 		MaxTrafficSamples: m.maxSamples,
+
+		NodeDir: m.NodeDirectory(),
 	}
 }
 

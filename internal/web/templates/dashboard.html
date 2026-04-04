@@ -127,7 +127,7 @@
                 </div>
             </div>
             <div class="overflow-x-auto max-h-[500px] overflow-y-auto">
-                <table class="w-full text-sm">
+                <table class="w-full text-sm min-w-[1100px]">
                     <thead class="sticky top-0 bg-gray-900">
                         <tr>
                             <th class="text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">Time</th>
@@ -150,24 +150,24 @@
                             <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap">
                                 <code class="font-mono text-xs">{{.Timestamp.Format "15:04:05.000"}}</code>
                             </td>
-                            <td class="px-3 py-1.5 border-b border-gray-800/50">
+                            <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap">
                                 {{if eq .Direction "from_node"}}
                                     <span class="inline-block text-[10px] font-bold px-2 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/30 font-mono uppercase">IN</span>
                                 {{else}}
                                     <span class="inline-block text-[10px] font-bold px-2 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/30 font-mono uppercase">OUT</span>
                                 {{end}}
                             </td>
-                            <td class="px-3 py-1.5 border-b border-gray-800/50">
+                            <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap">
                                 <code class="font-mono text-xs">{{.Type}}</code>
                             </td>
-                            <td class="px-3 py-1.5 border-b border-gray-800/50">
+                            <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap">
                                 <code class="font-mono text-xs text-gray-400">{{.PortNum}}</code>
                             </td>
-                            <td class="px-3 py-1.5 border-b border-gray-800/50">
-                                <code class="font-mono text-xs text-gray-400">{{nodeHex .From}}</code>
+                            <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap">
+                                {{nodeName .From $.Metrics.NodeDir}}
                             </td>
-                            <td class="px-3 py-1.5 border-b border-gray-800/50">
-                                <code class="font-mono text-xs text-gray-400">{{nodeHex .To}}</code>
+                            <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap">
+                                {{nodeName .To $.Metrics.NodeDir}}
                             </td>
                             <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap">
                                 {{if or .HopLimit .HopStart}}
@@ -195,13 +195,13 @@
                                     <span class="inline-block text-[10px] font-bold px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-400 border border-purple-500/30 font-mono">MQTT</span>
                                 {{end}}
                                 {{if .RelayNode}}
-                                    <span class="inline-block text-[10px] font-bold px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-400 border border-cyan-500/30 font-mono">!{{printf "%02x" .RelayNode}}</span>
+                                    <span class="font-mono text-xs text-cyan-400">{{relayName .RelayNode}}</span>
                                 {{end}}
                                 {{if and (not .ViaMqtt) (not .RelayNode)}}
                                     <span class="text-gray-600">&mdash;</span>
                                 {{end}}
                             </td>
-                            <td class="px-3 py-1.5 border-b border-gray-800/50 text-right tabular-nums">
+                            <td class="px-3 py-1.5 border-b border-gray-800/50 text-right tabular-nums whitespace-nowrap">
                                 {{.Size}}B
                             </td>
                             <td class="px-3 py-1.5 border-b border-gray-800/50 max-w-xs truncate" title="{{.Payload}}">
@@ -224,6 +224,7 @@
     <script>
         const initialTrafficSeries = {{json .Metrics.TrafficSeries}};
         const initialTypeCounts = {{json .Metrics.MessageTypeCounts}};
+        let nodeDir = {{json .Metrics.NodeDir}};
     </script>
 
     <script>
@@ -412,6 +413,10 @@
                 updateClientsUI(clients);
             });
 
+            evtSource.addEventListener('node_directory', function(e) {
+                nodeDir = JSON.parse(e.data);
+            });
+
             evtSource.onerror = function() {
                 sseIndicator.className = 'w-2 h-2 rounded-full bg-red-400';
                 sseLabel.textContent = 'Reconnecting...';
@@ -493,6 +498,11 @@
                 typesChart.update('none');
                 updateTypesLegend(typesChart);
             }
+
+            // Node directory — update from full snapshot
+            if (snap.node_dir) {
+                nodeDir = snap.node_dir;
+            }
         }
 
         // ── Prepend a new message row to the table ──
@@ -508,8 +518,8 @@
                 ? '<span class="inline-block text-[10px] font-bold px-2 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/30 font-mono uppercase">IN</span>'
                 : '<span class="inline-block text-[10px] font-bold px-2 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/30 font-mono uppercase">OUT</span>';
 
-            const fromHex = msg.from ? '!' + msg.from.toString(16).padStart(8, '0') : '';
-            const toHex = msg.to ? '!' + msg.to.toString(16).padStart(8, '0') : '';
+            const fromHTML = nodeName(msg.from);
+            const toHTML = nodeName(msg.to);
 
             const hopsStr = (msg.hop_limit || msg.hop_start) ? msg.hop_limit + '/' + msg.hop_start : '&mdash;';
             const rssiStr = msg.rx_rssi ? msg.rx_rssi : '&mdash;';
@@ -520,22 +530,22 @@
                 relayBadges += '<span class="inline-block text-[10px] font-bold px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-400 border border-purple-500/30 font-mono">MQTT</span> ';
             }
             if (msg.relay_node) {
-                relayBadges += '<span class="inline-block text-[10px] font-bold px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-400 border border-cyan-500/30 font-mono">!' + msg.relay_node.toString(16).padStart(2, '0') + '</span>';
+                relayBadges += relayNameJS(msg.relay_node);
             }
             if (!relayBadges) relayBadges = '<span class="text-gray-600">&mdash;</span>';
 
             tr.innerHTML = `
                 <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap"><code class="font-mono text-xs">${timeStr}</code></td>
-                <td class="px-3 py-1.5 border-b border-gray-800/50">${dirTag}</td>
-                <td class="px-3 py-1.5 border-b border-gray-800/50"><code class="font-mono text-xs">${esc(msg.type)}</code></td>
-                <td class="px-3 py-1.5 border-b border-gray-800/50"><code class="font-mono text-xs text-gray-400">${esc(msg.port_num)}</code></td>
-                <td class="px-3 py-1.5 border-b border-gray-800/50"><code class="font-mono text-xs text-gray-400">${esc(fromHex)}</code></td>
-                <td class="px-3 py-1.5 border-b border-gray-800/50"><code class="font-mono text-xs text-gray-400">${esc(toHex)}</code></td>
+                <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap">${dirTag}</td>
+                <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap"><code class="font-mono text-xs">${esc(msg.type)}</code></td>
+                <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap"><code class="font-mono text-xs text-gray-400">${esc(msg.port_num)}</code></td>
+                <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap">${fromHTML}</td>
+                <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap">${toHTML}</td>
                 <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap"><code class="font-mono text-xs">${hopsStr}</code></td>
                 <td class="px-3 py-1.5 border-b border-gray-800/50 text-right tabular-nums whitespace-nowrap"><code class="font-mono text-xs">${rssiStr}</code></td>
                 <td class="px-3 py-1.5 border-b border-gray-800/50 text-right tabular-nums whitespace-nowrap"><code class="font-mono text-xs">${snrStr}</code></td>
                 <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap">${relayBadges}</td>
-                <td class="px-3 py-1.5 border-b border-gray-800/50 text-right tabular-nums">${msg.size}B</td>
+                <td class="px-3 py-1.5 border-b border-gray-800/50 text-right tabular-nums whitespace-nowrap">${msg.size}B</td>
                 <td class="px-3 py-1.5 border-b border-gray-800/50 max-w-xs truncate" title="${esc(msg.payload || '')}"><span class="text-xs text-gray-300">${esc(msg.payload || '')}</span></td>
             `;
 
@@ -579,6 +589,29 @@
             const el = document.createElement('span');
             el.textContent = s;
             return el.innerHTML;
+        }
+
+        // ── Node name resolution ──
+        function nodeHex(n) {
+            if (!n) return '';
+            return '!' + n.toString(16).padStart(8, '0');
+        }
+
+        function nodeName(n) {
+            if (!n) return '';
+            const hex = nodeHex(n);
+            const key = n.toString();
+            if (nodeDir && nodeDir[key] && nodeDir[key].short_name) {
+                const entry = nodeDir[key];
+                return '<span title="' + esc(hex) + ' (' + esc(entry.long_name || '') + ')" class="cursor-help">' + esc(entry.short_name) + '</span>';
+            }
+            return '<code class="font-mono text-xs text-gray-400">' + esc(hex) + '</code>';
+        }
+
+        function relayNameJS(relayNode) {
+            if (!relayNode) return '';
+            const lastByte = relayNode & 0xFF;
+            return '<span class="font-mono text-xs text-cyan-400">!' + lastByte.toString(16).padStart(2, '0') + '</span>';
         }
 
         // ── Message filter ──

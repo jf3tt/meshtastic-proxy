@@ -1587,6 +1587,152 @@ func TestCopyBytes_Nil(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// ExtractNodeDirectory tests
+// ---------------------------------------------------------------------------
+
+func TestExtractNodeDirectory(t *testing.T) {
+	frames := [][]byte{
+		marshalFromRadio(t, &pb.FromRadio{
+			PayloadVariant: &pb.FromRadio_MyInfo{
+				MyInfo: &pb.MyNodeInfo{MyNodeNum: 0x12345678},
+			},
+		}),
+		marshalFromRadio(t, &pb.FromRadio{
+			PayloadVariant: &pb.FromRadio_NodeInfo{
+				NodeInfo: &pb.NodeInfo{
+					Num: 0x12345678,
+					User: &pb.User{
+						LongName:  "Base Node",
+						ShortName: "BN",
+					},
+				},
+			},
+		}),
+		marshalFromRadio(t, &pb.FromRadio{
+			PayloadVariant: &pb.FromRadio_NodeInfo{
+				NodeInfo: &pb.NodeInfo{
+					Num: 0xAABBCCDD,
+					User: &pb.User{
+						LongName:  "Remote Node",
+						ShortName: "RN",
+					},
+				},
+			},
+		}),
+		marshalFromRadio(t, &pb.FromRadio{
+			PayloadVariant: &pb.FromRadio_Config{
+				Config: &pb.Config{
+					PayloadVariant: &pb.Config_Device{
+						Device: &pb.Config_DeviceConfig{},
+					},
+				},
+			},
+		}),
+		marshalFromRadio(t, &pb.FromRadio{
+			PayloadVariant: &pb.FromRadio_ConfigCompleteId{
+				ConfigCompleteId: 12345,
+			},
+		}),
+	}
+
+	dir := ExtractNodeDirectory(frames)
+
+	if len(dir) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(dir))
+	}
+
+	entry, ok := dir[0x12345678]
+	if !ok {
+		t.Fatal("missing entry for 0x12345678")
+	}
+	if entry.ShortName != "BN" {
+		t.Errorf("short_name = %q, want %q", entry.ShortName, "BN")
+	}
+	if entry.LongName != "Base Node" {
+		t.Errorf("long_name = %q, want %q", entry.LongName, "Base Node")
+	}
+
+	entry2, ok := dir[0xAABBCCDD]
+	if !ok {
+		t.Fatal("missing entry for 0xAABBCCDD")
+	}
+	if entry2.ShortName != "RN" {
+		t.Errorf("short_name = %q, want %q", entry2.ShortName, "RN")
+	}
+}
+
+func TestExtractNodeDirectory_Empty(t *testing.T) {
+	dir := ExtractNodeDirectory(nil)
+	if len(dir) != 0 {
+		t.Fatalf("expected empty directory, got %d entries", len(dir))
+	}
+}
+
+func TestExtractNodeDirectory_SkipsNoUser(t *testing.T) {
+	frames := [][]byte{
+		marshalFromRadio(t, &pb.FromRadio{
+			PayloadVariant: &pb.FromRadio_NodeInfo{
+				NodeInfo: &pb.NodeInfo{
+					Num: 0x11111111,
+					// No User field
+				},
+			},
+		}),
+	}
+
+	dir := ExtractNodeDirectory(frames)
+	if len(dir) != 0 {
+		t.Fatalf("expected 0 entries (no user), got %d", len(dir))
+	}
+}
+
+func TestExtractNodeDirectory_SkipsZeroNum(t *testing.T) {
+	frames := [][]byte{
+		marshalFromRadio(t, &pb.FromRadio{
+			PayloadVariant: &pb.FromRadio_NodeInfo{
+				NodeInfo: &pb.NodeInfo{
+					Num: 0,
+					User: &pb.User{
+						LongName:  "Ghost",
+						ShortName: "GH",
+					},
+				},
+			},
+		}),
+	}
+
+	dir := ExtractNodeDirectory(frames)
+	if len(dir) != 0 {
+		t.Fatalf("expected 0 entries (zero num), got %d", len(dir))
+	}
+}
+
+func TestExtractNodeDirectory_SkipsGarbage(t *testing.T) {
+	frames := [][]byte{
+		{0xFF, 0xFF, 0xFF}, // garbage
+		marshalFromRadio(t, &pb.FromRadio{
+			PayloadVariant: &pb.FromRadio_NodeInfo{
+				NodeInfo: &pb.NodeInfo{
+					Num: 0xDEADBEEF,
+					User: &pb.User{
+						LongName:  "Valid",
+						ShortName: "VL",
+					},
+				},
+			},
+		}),
+	}
+
+	dir := ExtractNodeDirectory(frames)
+	if len(dir) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(dir))
+	}
+	if _, ok := dir[0xDEADBEEF]; !ok {
+		t.Fatal("missing entry for 0xDEADBEEF")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // close tests
 // ---------------------------------------------------------------------------
 

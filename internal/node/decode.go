@@ -426,3 +426,32 @@ func copyBytes(b []byte) []byte {
 	copy(cp, b)
 	return cp
 }
+
+// ExtractNodeDirectory parses NodeInfo frames from the config cache and
+// returns a map of node number → NodeEntry for name resolution.
+func ExtractNodeDirectory(frames [][]byte) map[uint32]metrics.NodeEntry {
+	dir := make(map[uint32]metrics.NodeEntry)
+	for _, frame := range frames {
+		msg := &pb.FromRadio{}
+		if err := proto.Unmarshal(frame, msg); err != nil {
+			continue
+		}
+		ni, ok := msg.GetPayloadVariant().(*pb.FromRadio_NodeInfo)
+		if !ok || ni.NodeInfo == nil {
+			continue
+		}
+		num := ni.NodeInfo.GetNum()
+		if num == 0 {
+			continue
+		}
+		u := ni.NodeInfo.GetUser()
+		if u == nil {
+			continue
+		}
+		dir[num] = metrics.NodeEntry{
+			ShortName: u.GetShortName(),
+			LongName:  u.GetLongName(),
+		}
+	}
+	return dir
+}

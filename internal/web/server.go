@@ -40,6 +40,27 @@ func NewServer(listenAddr string, m *metrics.Metrics, logger *slog.Logger, clien
 			}
 			return fmt.Sprintf("!%08x", n)
 		},
+		"nodeName": func(n uint32, dir map[uint32]metrics.NodeEntry) template.HTML {
+			if n == 0 {
+				return ""
+			}
+			hex := fmt.Sprintf("!%08x", n)
+			if entry, ok := dir[n]; ok && entry.ShortName != "" {
+				return template.HTML(fmt.Sprintf(
+					`<span title="%s (%s)" class="cursor-help">%s</span>`,
+					hex, template.HTMLEscapeString(entry.LongName),
+					template.HTMLEscapeString(entry.ShortName),
+				))
+			}
+			return template.HTML(fmt.Sprintf(
+				`<code class="font-mono text-xs text-gray-400">%s</code>`, hex))
+		},
+		"relayName": func(relayNode uint32) string {
+			if relayNode == 0 {
+				return ""
+			}
+			return fmt.Sprintf("!%02x", uint8(relayNode&0xFF))
+		},
 		"formatBytes": func(b int64) string {
 			if b == 0 {
 				return "0 B"
@@ -219,6 +240,10 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	// Send initial client list
 	clientsJSON, _ := json.Marshal(s.clientsFn())
 	_, _ = fmt.Fprintf(w, "event: clients\ndata: %s\n\n", clientsJSON)
+
+	// Send initial node directory
+	nodeDirJSON, _ := json.Marshal(s.metrics.NodeDirectory())
+	_, _ = fmt.Fprintf(w, "event: node_directory\ndata: %s\n\n", nodeDirJSON)
 	flusher.Flush()
 
 	for {

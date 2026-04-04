@@ -263,9 +263,15 @@ func (c *Connection) readLoop(ctx context.Context, conn net.Conn) error {
 				c.configMu.Unlock()
 				collectingConfig = false
 				c.metrics.SetConfigCacheUpdated(len(configFrames))
+
+				// Build node directory from NodeInfo frames in the config cache.
+				nodeDir := ExtractNodeDirectory(configFrames)
+				c.metrics.SetNodeDirectory(nodeDir)
+
 				c.logger.Info("node config cached",
 					"frames", len(configFrames),
 					"breakdown", CountCacheFrameTypes(configFrames),
+					"nodes", len(nodeDir),
 				)
 			}
 		default:
