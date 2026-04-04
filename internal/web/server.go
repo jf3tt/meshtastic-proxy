@@ -336,7 +336,7 @@ func (s *Server) handleAPIChatSend(w http.ResponseWriter, r *http.Request) {
 
 // channelInfo is a single channel entry returned by the channels API.
 type channelInfo struct {
-	Index uint32 `json:"index"`
+	Index int32  `json:"index"`
 	Name  string `json:"name"`
 	Role  string `json:"role"`
 }
@@ -368,7 +368,7 @@ func (s *Server) handleAPIChatChannels(w http.ResponseWriter, _ *http.Request) {
 				name = "Primary"
 			}
 			channels = append(channels, channelInfo{
-				Index: uint32(ch.Channel.GetIndex()),
+				Index: ch.Channel.GetIndex(),
 				Name:  name,
 				Role:  role.String(),
 			})
