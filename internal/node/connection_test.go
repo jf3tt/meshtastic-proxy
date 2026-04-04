@@ -980,14 +980,21 @@ func TestDecodeFromRadio_Packet(t *testing.T) {
 	payload := marshalFromRadio(t, &pb.FromRadio{
 		PayloadVariant: &pb.FromRadio_Packet{
 			Packet: &pb.MeshPacket{
-				From: 0xAABBCCDD,
-				To:   0xFFFFFFFF,
+				From:    0xAABBCCDD,
+				To:      0xFFFFFFFF,
+				Channel: 1,
 				PayloadVariant: &pb.MeshPacket_Decoded{
 					Decoded: &pb.Data{
 						Portnum: pb.PortNum_TEXT_MESSAGE_APP,
 						Payload: []byte("Hello"),
 					},
 				},
+				HopLimit:  3,
+				HopStart:  7,
+				RxRssi:    -87,
+				RxSnr:     6.5,
+				ViaMqtt:   true,
+				RelayNode: 0xAB,
 			},
 		},
 	})
@@ -1007,6 +1014,62 @@ func TestDecodeFromRadio_Packet(t *testing.T) {
 	}
 	if rec.Payload != "Hello" {
 		t.Errorf("payload = %q, want %q", rec.Payload, "Hello")
+	}
+	if rec.HopLimit != 3 {
+		t.Errorf("hop_limit = %d, want 3", rec.HopLimit)
+	}
+	if rec.HopStart != 7 {
+		t.Errorf("hop_start = %d, want 7", rec.HopStart)
+	}
+	if rec.RxRssi != -87 {
+		t.Errorf("rx_rssi = %d, want -87", rec.RxRssi)
+	}
+	if rec.RxSnr != 6.5 {
+		t.Errorf("rx_snr = %f, want 6.5", rec.RxSnr)
+	}
+	if !rec.ViaMqtt {
+		t.Error("via_mqtt = false, want true")
+	}
+	if rec.RelayNode != 0xAB {
+		t.Errorf("relay_node = 0x%x, want 0xAB", rec.RelayNode)
+	}
+}
+
+func TestDecodeFromRadio_PacketRadioMetadataDefaults(t *testing.T) {
+	// Verify that a packet without radio metadata fields decodes with zero values.
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From: 0x11223344,
+				To:   0x55667788,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum: pb.PortNum_POSITION_APP,
+						Payload: []byte{},
+					},
+				},
+			},
+		},
+	})
+
+	rec := decodeFromRadio(payload)
+	if rec.HopLimit != 0 {
+		t.Errorf("hop_limit = %d, want 0", rec.HopLimit)
+	}
+	if rec.HopStart != 0 {
+		t.Errorf("hop_start = %d, want 0", rec.HopStart)
+	}
+	if rec.RxRssi != 0 {
+		t.Errorf("rx_rssi = %d, want 0", rec.RxRssi)
+	}
+	if rec.RxSnr != 0 {
+		t.Errorf("rx_snr = %f, want 0", rec.RxSnr)
+	}
+	if rec.ViaMqtt {
+		t.Error("via_mqtt = true, want false")
+	}
+	if rec.RelayNode != 0 {
+		t.Errorf("relay_node = 0x%x, want 0", rec.RelayNode)
 	}
 }
 

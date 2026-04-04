@@ -11,15 +11,21 @@ import (
 // MessageRecord stores information about a proxied message.
 type MessageRecord struct {
 	Timestamp time.Time `json:"timestamp"`
-	Direction string    `json:"direction"` // "from_node" or "to_node"
-	Type      string    `json:"type"`      // protobuf message type
-	Size      int       `json:"size"`      // payload size in bytes
-	Client    string    `json:"client"`    // client address (for to_node direction)
-	PortNum   string    `json:"port_num"`  // e.g. "TEXT_MESSAGE_APP", "POSITION_APP"
-	From      uint32    `json:"from"`      // source node number
-	To        uint32    `json:"to"`        // destination node number
-	Channel   uint32    `json:"channel"`   // channel index
-	Payload   string    `json:"payload"`   // decoded human-readable payload
+	Direction string    `json:"direction"`  // "from_node" or "to_node"
+	Type      string    `json:"type"`       // protobuf message type
+	Size      int       `json:"size"`       // payload size in bytes
+	Client    string    `json:"client"`     // client address (for to_node direction)
+	PortNum   string    `json:"port_num"`   // e.g. "TEXT_MESSAGE_APP", "POSITION_APP"
+	From      uint32    `json:"from"`       // source node number
+	To        uint32    `json:"to"`         // destination node number
+	Channel   uint32    `json:"channel"`    // channel index
+	HopLimit  uint32    `json:"hop_limit"`  // remaining hop count
+	HopStart  uint32    `json:"hop_start"`  // initial hop count (0 = unknown)
+	RxRssi    int32     `json:"rx_rssi"`    // RSSI at receiver (dBm, negative)
+	RxSnr     float32   `json:"rx_snr"`     // SNR at receiver (dB)
+	ViaMqtt   bool      `json:"via_mqtt"`   // relayed through MQTT gateway
+	RelayNode uint32    `json:"relay_node"` // last byte of relay node number (0 = direct)
+	Payload   string    `json:"payload"`    // decoded human-readable payload
 }
 
 // TrafficSample is a single point in the traffic time-series.

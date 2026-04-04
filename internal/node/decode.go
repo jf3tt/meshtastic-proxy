@@ -142,7 +142,7 @@ func decodeToRadio(payload []byte) metrics.MessageRecord {
 	return rec
 }
 
-// decodeMeshPacket extracts from/to/channel/portnum and decodes the payload.
+// decodeMeshPacket extracts from/to/channel/portnum/radio metadata and decodes the payload.
 func decodeMeshPacket(pkt *pb.MeshPacket, rec *metrics.MessageRecord) {
 	if pkt == nil {
 		return
@@ -151,6 +151,12 @@ func decodeMeshPacket(pkt *pb.MeshPacket, rec *metrics.MessageRecord) {
 	rec.From = pkt.GetFrom()
 	rec.To = pkt.GetTo()
 	rec.Channel = pkt.GetChannel()
+	rec.HopLimit = pkt.GetHopLimit()
+	rec.HopStart = pkt.GetHopStart()
+	rec.RxRssi = pkt.GetRxRssi()
+	rec.RxSnr = pkt.GetRxSnr()
+	rec.ViaMqtt = pkt.GetViaMqtt()
+	rec.RelayNode = pkt.GetRelayNode()
 
 	switch v := pkt.GetPayloadVariant().(type) {
 	case *pb.MeshPacket_Decoded:

@@ -136,6 +136,10 @@
                             <th class="text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">Port</th>
                             <th class="text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">From</th>
                             <th class="text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">To</th>
+                            <th class="text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">Hops</th>
+                            <th class="text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">RSSI</th>
+                            <th class="text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">SNR</th>
+                            <th class="text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">Relay</th>
                             <th class="text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">Size</th>
                             <th class="text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">Payload</th>
                         </tr>
@@ -164,6 +168,38 @@
                             </td>
                             <td class="px-3 py-1.5 border-b border-gray-800/50">
                                 <code class="font-mono text-xs text-gray-400">{{nodeHex .To}}</code>
+                            </td>
+                            <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap">
+                                {{if or .HopLimit .HopStart}}
+                                    <code class="font-mono text-xs">{{.HopLimit}}/{{.HopStart}}</code>
+                                {{else}}
+                                    <span class="text-gray-600">&mdash;</span>
+                                {{end}}
+                            </td>
+                            <td class="px-3 py-1.5 border-b border-gray-800/50 text-right tabular-nums whitespace-nowrap">
+                                {{if .RxRssi}}
+                                    <code class="font-mono text-xs">{{.RxRssi}}</code>
+                                {{else}}
+                                    <span class="text-gray-600">&mdash;</span>
+                                {{end}}
+                            </td>
+                            <td class="px-3 py-1.5 border-b border-gray-800/50 text-right tabular-nums whitespace-nowrap">
+                                {{if .RxSnr}}
+                                    <code class="font-mono text-xs">{{printf "%.1f" .RxSnr}}</code>
+                                {{else}}
+                                    <span class="text-gray-600">&mdash;</span>
+                                {{end}}
+                            </td>
+                            <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap">
+                                {{if .ViaMqtt}}
+                                    <span class="inline-block text-[10px] font-bold px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-400 border border-purple-500/30 font-mono">MQTT</span>
+                                {{end}}
+                                {{if .RelayNode}}
+                                    <span class="inline-block text-[10px] font-bold px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-400 border border-cyan-500/30 font-mono">!{{printf "%02x" .RelayNode}}</span>
+                                {{end}}
+                                {{if and (not .ViaMqtt) (not .RelayNode)}}
+                                    <span class="text-gray-600">&mdash;</span>
+                                {{end}}
                             </td>
                             <td class="px-3 py-1.5 border-b border-gray-800/50 text-right tabular-nums">
                                 {{.Size}}B
@@ -475,6 +511,19 @@
             const fromHex = msg.from ? '!' + msg.from.toString(16).padStart(8, '0') : '';
             const toHex = msg.to ? '!' + msg.to.toString(16).padStart(8, '0') : '';
 
+            const hopsStr = (msg.hop_limit || msg.hop_start) ? msg.hop_limit + '/' + msg.hop_start : '&mdash;';
+            const rssiStr = msg.rx_rssi ? msg.rx_rssi : '&mdash;';
+            const snrStr = msg.rx_snr ? msg.rx_snr.toFixed(1) : '&mdash;';
+
+            let relayBadges = '';
+            if (msg.via_mqtt) {
+                relayBadges += '<span class="inline-block text-[10px] font-bold px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-400 border border-purple-500/30 font-mono">MQTT</span> ';
+            }
+            if (msg.relay_node) {
+                relayBadges += '<span class="inline-block text-[10px] font-bold px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-400 border border-cyan-500/30 font-mono">!' + msg.relay_node.toString(16).padStart(2, '0') + '</span>';
+            }
+            if (!relayBadges) relayBadges = '<span class="text-gray-600">&mdash;</span>';
+
             tr.innerHTML = `
                 <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap"><code class="font-mono text-xs">${timeStr}</code></td>
                 <td class="px-3 py-1.5 border-b border-gray-800/50">${dirTag}</td>
@@ -482,6 +531,10 @@
                 <td class="px-3 py-1.5 border-b border-gray-800/50"><code class="font-mono text-xs text-gray-400">${esc(msg.port_num)}</code></td>
                 <td class="px-3 py-1.5 border-b border-gray-800/50"><code class="font-mono text-xs text-gray-400">${esc(fromHex)}</code></td>
                 <td class="px-3 py-1.5 border-b border-gray-800/50"><code class="font-mono text-xs text-gray-400">${esc(toHex)}</code></td>
+                <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap"><code class="font-mono text-xs">${hopsStr}</code></td>
+                <td class="px-3 py-1.5 border-b border-gray-800/50 text-right tabular-nums whitespace-nowrap"><code class="font-mono text-xs">${rssiStr}</code></td>
+                <td class="px-3 py-1.5 border-b border-gray-800/50 text-right tabular-nums whitespace-nowrap"><code class="font-mono text-xs">${snrStr}</code></td>
+                <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap">${relayBadges}</td>
                 <td class="px-3 py-1.5 border-b border-gray-800/50 text-right tabular-nums">${msg.size}B</td>
                 <td class="px-3 py-1.5 border-b border-gray-800/50 max-w-xs truncate" title="${esc(msg.payload || '')}"><span class="text-xs text-gray-300">${esc(msg.payload || '')}</span></td>
             `;
