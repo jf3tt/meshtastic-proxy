@@ -20,15 +20,17 @@ var templateFS embed.FS
 
 // Server provides an HTTP dashboard and API for monitoring the proxy.
 type Server struct {
-	listenAddr string
-	metrics    *metrics.Metrics
-	logger     *slog.Logger
-	clientsFn  func() []string // returns connected client addresses
-	templates  *template.Template
+	listenAddr  string
+	metrics     *metrics.Metrics
+	logger      *slog.Logger
+	clientsFn   func() []string // returns connected client addresses
+	templates   *template.Template
+	promHandler http.Handler // Prometheus metrics handler (nil = disabled)
 }
 
 // NewServer creates a new web server.
-func NewServer(listenAddr string, m *metrics.Metrics, logger *slog.Logger, clientsFn func() []string) *Server {
+// promHandler is optional; when non-nil it is registered at GET /metrics.
+func NewServer(listenAddr string, m *metrics.Metrics, logger *slog.Logger, clientsFn func() []string, promHandler http.Handler) *Server {
 	funcMap := template.FuncMap{
 		"json": func(v any) template.JS {
 			b, _ := json.Marshal(v)
@@ -83,11 +85,12 @@ func NewServer(listenAddr string, m *metrics.Metrics, logger *slog.Logger, clien
 	tmpl := template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/*.html"))
 
 	return &Server{
-		listenAddr: listenAddr,
-		metrics:    m,
-		logger:     logger,
-		clientsFn:  clientsFn,
-		templates:  tmpl,
+		listenAddr:  listenAddr,
+		metrics:     m,
+		logger:      logger,
+		clientsFn:   clientsFn,
+		templates:   tmpl,
+		promHandler: promHandler,
 	}
 }
 
@@ -111,6 +114,11 @@ func (s *Server) buildMux() *http.ServeMux {
 	mux.HandleFunc("/api/metrics", s.handleAPIMetrics)
 	mux.HandleFunc("/api/clients", s.handleAPIClients)
 	mux.HandleFunc("/api/events", s.handleSSE)
+
+	// Prometheus metrics endpoint
+	if s.promHandler != nil {
+		mux.Handle("/metrics", s.promHandler)
+	}
 
 	return mux
 }

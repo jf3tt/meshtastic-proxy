@@ -14,6 +14,10 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: meshtastic-proxy
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8090"
+        prometheus.io/path: "/metrics"
     spec:
       # hostNetwork is required for mDNS multicast to reach the home LAN.
       # The pod shares the host's network stack and can send/receive multicast

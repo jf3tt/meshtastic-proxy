@@ -12,11 +12,18 @@ import (
 	"time"
 
 	"github.com/jfett/meshtastic-proxy/internal/metrics"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
+
+// newPromHTTPHandler wraps a Prometheus registry into an http.Handler.
+func newPromHTTPHandler(reg *prometheus.Registry) http.Handler {
+	return promhttp.HandlerFor(reg, promhttp.HandlerOpts{})
+}
 
 // newTestServer creates a Server backed by fresh metrics and a mock clientsFn.
 func newTestServer(t *testing.T, clients []string) *Server {
@@ -28,7 +35,7 @@ func newTestServer(t *testing.T, clients []string) *Server {
 		return clients
 	}
 
-	return NewServer(":0", m, slog.Default(), clientsFn)
+	return NewServer(":0", m, slog.Default(), clientsFn, nil)
 }
 
 // newTestServerWithMetrics creates a Server with a pre-configured Metrics.
@@ -37,7 +44,7 @@ func newTestServerWithMetrics(t *testing.T, m *metrics.Metrics, clients []string
 	clientsFn := func() []string {
 		return clients
 	}
-	return NewServer(":0", m, slog.Default(), clientsFn)
+	return NewServer(":0", m, slog.Default(), clientsFn, nil)
 }
 
 // ---------------------------------------------------------------------------
@@ -399,7 +406,7 @@ func TestSSE_ReceivesPublishedEvents(t *testing.T) {
 
 func TestRun_StartsAndStops(t *testing.T) {
 	m := metrics.New(10, 300)
-	s := NewServer("127.0.0.1:0", m, slog.Default(), func() []string { return nil })
+	s := NewServer("127.0.0.1:0", m, slog.Default(), func() []string { return nil }, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -430,7 +437,7 @@ func TestRun_ServesRequests(t *testing.T) {
 
 	// Use a test HTTP server via httptest for more reliable testing.
 	mux := http.NewServeMux()
-	s := NewServer(":0", m, slog.Default(), func() []string { return nil })
+	s := NewServer(":0", m, slog.Default(), func() []string { return nil }, nil)
 
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.HandleFunc("/readyz", s.handleReadyz)
@@ -596,7 +603,7 @@ func TestFormatBytesTemplateFunc(t *testing.T) {
 func TestNewServer(t *testing.T) {
 	m := metrics.New(10, 300)
 	clients := []string{"10.0.0.1:1234"}
-	s := NewServer(":8090", m, slog.Default(), func() []string { return clients })
+	s := NewServer(":8090", m, slog.Default(), func() []string { return clients }, nil)
 
 	if s.listenAddr != ":8090" {
 		t.Errorf("listenAddr = %q, want %q", s.listenAddr, ":8090")
@@ -614,5 +621,77 @@ func TestNewServer(t *testing.T) {
 	got := s.clientsFn()
 	if len(got) != 1 || got[0] != "10.0.0.1:1234" {
 		t.Errorf("clientsFn() = %v, want [10.0.0.1:1234]", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// /metrics (Prometheus) tests
+// ---------------------------------------------------------------------------
+
+func TestPrometheusMetrics_Endpoint(t *testing.T) {
+	m := metrics.New(10, 300)
+	m.NodeAddress = "10.10.0.3:4403"
+	m.NodeConnected.Store(true)
+	m.ActiveClients.Store(2)
+	m.BytesFromNode.Store(4096)
+	m.RecordMessage(metrics.MessageRecord{Type: "mesh_packet", PortNum: "TEXT_MESSAGE_APP", Size: 50})
+
+	promRegistry := metrics.NewPrometheusRegistry(m)
+	promHandler := newPromHTTPHandler(promRegistry)
+
+	s := NewServer(":0", m, slog.Default(), func() []string { return nil }, promHandler)
+	mux := s.buildMux()
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/metrics")
+	if err != nil {
+		t.Fatalf("GET /metrics: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != 200 {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
+
+	ct := resp.Header.Get("Content-Type")
+	if !strings.Contains(ct, "text/plain") && !strings.Contains(ct, "text/openmetrics") {
+		t.Errorf("Content-Type = %q, want text/plain or text/openmetrics", ct)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	text := string(body)
+
+	mustContain := []string{
+		"meshtastic_proxy_node_connected 1",
+		"meshtastic_proxy_active_clients 2",
+		"meshtastic_proxy_bytes_from_node_total 4096",
+		"meshtastic_proxy_info{node_address=\"10.10.0.3:4403\"} 1",
+		"meshtastic_proxy_messages_total{port_num=\"TEXT_MESSAGE_APP\"} 1",
+		"go_goroutines",
+	}
+
+	for _, want := range mustContain {
+		if !strings.Contains(text, want) {
+			t.Errorf("response missing expected string %q", want)
+		}
+	}
+}
+
+func TestPrometheusMetrics_DisabledWhenNilHandler(t *testing.T) {
+	s := newTestServer(t, nil)
+	mux := s.buildMux()
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	// With nil promHandler, /metrics should 404 (falls through to dashboard handler).
+	resp, err := http.Get(ts.URL + "/metrics")
+	if err != nil {
+		t.Fatalf("GET /metrics: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != 404 {
+		t.Errorf("status = %d, want 404 when promHandler is nil", resp.StatusCode)
 	}
 }

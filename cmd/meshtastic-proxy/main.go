@@ -15,6 +15,7 @@ import (
 	"github.com/jfett/meshtastic-proxy/internal/node"
 	"github.com/jfett/meshtastic-proxy/internal/proxy"
 	"github.com/jfett/meshtastic-proxy/internal/web"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
@@ -88,11 +89,15 @@ func main() {
 
 	// Start web dashboard
 	if cfg.Web.Enabled {
+		promRegistry := metrics.NewPrometheusRegistry(m)
+		promHandler := promhttp.HandlerFor(promRegistry, promhttp.HandlerOpts{})
+
 		webServer := web.NewServer(
 			cfg.Web.Listen,
 			m,
 			logger.With("component", "web"),
 			proxyHub.ClientAddrs,
+			promHandler,
 		)
 		go func() {
 			errCh <- webServer.Run(ctx)
