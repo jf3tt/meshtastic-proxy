@@ -447,7 +447,7 @@ func TestRun_ServesRequests(t *testing.T) {
 		t.Fatalf("GET /healthz: %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != 200 {
 		t.Errorf("/healthz status = %d, want 200", resp.StatusCode)
 	}
@@ -460,8 +460,8 @@ func TestRun_ServesRequests(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /readyz: %v", err)
 	}
-	body, _ = io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
 	if resp.StatusCode != 200 {
 		t.Errorf("/readyz status = %d, want 200", resp.StatusCode)
 	}
@@ -471,7 +471,7 @@ func TestRun_ServesRequests(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /api/metrics: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != 200 {
 		t.Errorf("/api/metrics status = %d, want 200", resp.StatusCode)
 	}
@@ -496,7 +496,7 @@ func TestStaticFiles_TailwindCSS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /static/tailwind.css: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		t.Errorf("status = %d, want 200", resp.StatusCode)
@@ -523,7 +523,7 @@ func TestStaticFiles_StyleCSS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /static/style.css: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		t.Errorf("status = %d, want 200", resp.StatusCode)
@@ -540,7 +540,7 @@ func TestStaticFiles_ChartJS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /static/chart.js: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		t.Errorf("status = %d, want 200", resp.StatusCode)
@@ -557,7 +557,7 @@ func TestStaticFiles_NotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /static/nonexistent.css: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 404 {
 		t.Errorf("status = %d, want 404", resp.StatusCode)

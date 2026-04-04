@@ -251,7 +251,7 @@ func TestConfigCache_DeepCopy(t *testing.T) {
 
 	// Modify the returned copy — should not affect the original.
 	cache[0][0] = 0xFF
-	cache = append(cache, []byte{0xAA})
+	_ = append(cache, []byte{0xAA}) //nolint:gocritic // intentional: verify append doesn't affect original
 
 	c.configMu.RLock()
 	if c.configCache[0][0] != 0x01 {
@@ -539,8 +539,9 @@ func TestReadLoop_ContextCancel(t *testing.T) {
 
 	select {
 	case err := <-errCh:
+		// Acceptable: either context.Canceled or a read error after Close.
 		if err != nil && err != context.Canceled {
-			// Acceptable: either context.Canceled or a read error after Close.
+			t.Logf("readLoop returned non-cancel error (acceptable): %v", err)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("readLoop did not return after context cancel")
@@ -645,7 +646,7 @@ func TestRun_ConnectsAndCaches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	c := newTestConnection(ln.Addr().String(), m)
 
@@ -672,7 +673,7 @@ func TestRun_ConnectsAndCaches(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for node connection")
 	}
-	defer nodeConn.Close()
+	defer func() { _ = nodeConn.Close() }()
 
 	// Read the want_config_id request from the proxy.
 	got := readFrame(t, nodeConn, 2*time.Second)
@@ -723,7 +724,7 @@ func TestRun_ReconnectsOnDisconnect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	c := newTestConnection(ln.Addr().String(), m)
 
@@ -773,7 +774,7 @@ func TestRun_ReconnectsOnDisconnect(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for reconnection")
 	}
-	defer conn2.Close()
+	defer func() { _ = conn2.Close() }()
 
 	// Read want_config_id from the second connection.
 	got := readFrame(t, conn2, 2*time.Second)
@@ -852,7 +853,7 @@ func TestRun_ContextCancelStops(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	c := newTestConnection(ln.Addr().String(), m)
 
@@ -872,7 +873,7 @@ func TestRun_ContextCancelStops(t *testing.T) {
 		}
 		// Keep conn open until test ends.
 		<-done
-		conn.Close()
+		_ = conn.Close()
 	}()
 
 	// Give time for connection.
@@ -894,7 +895,7 @@ func TestRun_ForwardsToRadio(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	c := newTestConnection(ln.Addr().String(), m)
 
@@ -918,7 +919,7 @@ func TestRun_ForwardsToRadio(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for node connection")
 	}
-	defer nodeConn.Close()
+	defer func() { _ = nodeConn.Close() }()
 
 	// Read and discard want_config_id.
 	_ = readFrame(t, nodeConn, 2*time.Second)
@@ -1409,7 +1410,7 @@ func TestDecodeDataPayload_Routing(t *testing.T) {
 func TestDecodeDataPayload_UnknownPortShort(t *testing.T) {
 	// Small payload — should return hex
 	data := []byte{0x01, 0x02, 0x03}
-	result := decodeDataPayload(pb.PortNum_UNKNOWN_APP, data)
+	result := decodeDataPayload(pb.PortNum_UNKNOWN_APP, data) //nolint:staticcheck // deprecated constant used for test coverage
 	if result != "010203" {
 		t.Errorf("got %q, want %q", result, "010203")
 	}
@@ -1421,7 +1422,7 @@ func TestDecodeDataPayload_UnknownPortLong(t *testing.T) {
 	for i := range data {
 		data[i] = byte(i)
 	}
-	result := decodeDataPayload(pb.PortNum_UNKNOWN_APP, data)
+	result := decodeDataPayload(pb.PortNum_UNKNOWN_APP, data) //nolint:staticcheck // deprecated constant used for test coverage
 	expected := fmt.Sprintf("%s... (%d bytes)",
 		fmt.Sprintf("%064x", data[:32])[:64], 64) // hex of first 32 bytes
 	// Just check it ends with the byte count.

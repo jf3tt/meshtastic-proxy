@@ -1151,10 +1151,10 @@ func TestRun_AcceptsConnections(t *testing.T) {
 
 	// Connect 2 clients — dialWithRetry waits for listener to be ready.
 	conn1 := dialWithRetry(t, addr, 2*time.Second)
-	defer conn1.Close()
+	defer func() { _ = conn1.Close() }()
 
 	conn2 := dialWithRetry(t, addr, 2*time.Second)
-	defer conn2.Close()
+	defer func() { _ = conn2.Close() }()
 
 	// Wait for both clients to be registered.
 	waitFor(t, 2*time.Second, func() bool { return p.Clients() == 2 }, "expected 2 registered clients")
@@ -1195,13 +1195,13 @@ func TestRun_MaxClientsRejected(t *testing.T) {
 
 	// First client should be accepted.
 	conn1 := dialWithRetry(t, addr, 2*time.Second)
-	defer conn1.Close()
+	defer func() { _ = conn1.Close() }()
 
 	waitFor(t, 2*time.Second, func() bool { return p.Clients() == 1 }, "first client was not registered")
 
 	// Second client should be rejected (connection accepted then immediately closed).
 	conn2 := dialWithRetry(t, addr, 2*time.Second)
-	defer conn2.Close()
+	defer func() { _ = conn2.Close() }()
 
 	// The rejected connection should be closed by the server.
 	// Try to read — should get EOF.
@@ -1246,7 +1246,7 @@ func TestRun_GracefulShutdown(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		c := dialWithRetry(t, addr, 2*time.Second)
 		conns[i] = c
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 	}
 
 	waitFor(t, 2*time.Second, func() bool { return p.Clients() == 3 }, "expected 3 registered clients")
@@ -1299,7 +1299,7 @@ func TestRun_BroadcastToClients(t *testing.T) {
 
 	// Connect a client.
 	conn := dialWithRetry(t, addr, 2*time.Second)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	waitFor(t, 2*time.Second, func() bool { return p.Clients() == 1 }, "client was not registered")
 
