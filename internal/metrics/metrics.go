@@ -33,8 +33,8 @@ type TrafficSample struct {
 
 // Event is sent to SSE subscribers.
 type Event struct {
-	Type string      `json:"type"` // "metrics" or "message"
-	Data interface{} `json:"data"`
+	Type string `json:"type"` // "metrics" or "message"
+	Data any    `json:"data"`
 }
 
 // Metrics collects runtime statistics about the proxy.
@@ -71,12 +71,12 @@ type Metrics struct {
 	ConfigReplaysNodesOnly  atomic.Int64
 
 	// Message log (ring buffer)
-	mu          sync.Mutex
+	mu          sync.RWMutex
 	messages    []MessageRecord
 	maxMessages int
 
 	// Traffic time-series (ring buffer)
-	trafficMu      sync.Mutex
+	trafficMu      sync.RWMutex
 	trafficSamples []TrafficSample
 	maxSamples     int
 	lastFramesIn   int64
@@ -85,7 +85,7 @@ type Metrics struct {
 	lastBytesOut   int64
 
 	// Message type counters for doughnut chart
-	typeMu     sync.Mutex
+	typeMu     sync.RWMutex
 	typeCounts map[string]int64
 
 	// Pub/sub for SSE
@@ -222,8 +222,8 @@ func (m *Metrics) RecordMessage(rec MessageRecord) {
 
 // Messages returns a copy of the recent message log.
 func (m *Metrics) Messages() []MessageRecord {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 
 	result := make([]MessageRecord, len(m.messages))
 	copy(result, m.messages)
@@ -232,8 +232,8 @@ func (m *Metrics) Messages() []MessageRecord {
 
 // TrafficSeries returns a copy of the traffic time-series.
 func (m *Metrics) TrafficSeries() []TrafficSample {
-	m.trafficMu.Lock()
-	defer m.trafficMu.Unlock()
+	m.trafficMu.RLock()
+	defer m.trafficMu.RUnlock()
 
 	result := make([]TrafficSample, len(m.trafficSamples))
 	copy(result, m.trafficSamples)
@@ -242,8 +242,8 @@ func (m *Metrics) TrafficSeries() []TrafficSample {
 
 // MessageTypeCounts returns message type distribution.
 func (m *Metrics) MessageTypeCounts() map[string]int64 {
-	m.typeMu.Lock()
-	defer m.typeMu.Unlock()
+	m.typeMu.RLock()
+	defer m.typeMu.RUnlock()
 
 	result := make(map[string]int64, len(m.typeCounts))
 	for k, v := range m.typeCounts {
@@ -320,37 +320,80 @@ type Snapshot struct {
 	MaxTrafficSamples int `json:"max_traffic_samples"`
 }
 
-// Snapshot returns a consistent snapshot of the current metrics.
-func (m *Metrics) Snapshot() Snapshot {
+// counters holds a consistent reading of all atomic counters and derived values.
+type counters struct {
+	uptimeStr               string
+	nodeConnected           bool
+	nodeAddress             string
+	activeClients           int64
+	bytesFromNode           int64
+	bytesToNode             int64
+	framesFromNode          int64
+	framesToNode            int64
+	messageTypeCounts       map[string]int64
+	nodeReconnects          int64
+	nodeConnectionErrors    int64
+	configCacheFrames       int64
+	configCacheAge          string
+	configReplaysFull       int64
+	configReplaysConfigOnly int64
+	configReplaysNodesOnly  int64
+}
+
+// readCounters reads all atomic counters once, returning a consistent snapshot.
+func (m *Metrics) readCounters() counters {
 	uptime := m.Uptime()
 	cacheAge := m.ConfigCacheAge()
 	cacheAgeStr := ""
 	if cacheAge > 0 {
 		cacheAgeStr = formatDuration(cacheAge)
 	}
+	return counters{
+		uptimeStr:               formatDuration(uptime),
+		nodeConnected:           m.NodeConnected.Load(),
+		nodeAddress:             m.NodeAddress,
+		activeClients:           m.ActiveClients.Load(),
+		bytesFromNode:           m.BytesFromNode.Load(),
+		bytesToNode:             m.BytesToNode.Load(),
+		framesFromNode:          m.FramesFromNode.Load(),
+		framesToNode:            m.FramesToNode.Load(),
+		messageTypeCounts:       m.MessageTypeCounts(),
+		nodeReconnects:          m.NodeReconnects.Load(),
+		nodeConnectionErrors:    m.NodeConnectionErrors.Load(),
+		configCacheFrames:       m.ConfigCacheFrames.Load(),
+		configCacheAge:          cacheAgeStr,
+		configReplaysFull:       m.ConfigReplaysFull.Load(),
+		configReplaysConfigOnly: m.ConfigReplaysConfigOnly.Load(),
+		configReplaysNodesOnly:  m.ConfigReplaysNodesOnly.Load(),
+	}
+}
+
+// Snapshot returns a consistent snapshot of the current metrics.
+func (m *Metrics) Snapshot() Snapshot {
+	c := m.readCounters()
 	return Snapshot{
-		Uptime:            uptime,
-		UptimeStr:         formatDuration(uptime),
-		NodeConnected:     m.NodeConnected.Load(),
-		NodeAddress:       m.NodeAddress,
-		ActiveClients:     m.ActiveClients.Load(),
-		BytesFromNode:     m.BytesFromNode.Load(),
-		BytesToNode:       m.BytesToNode.Load(),
-		FramesFromNode:    m.FramesFromNode.Load(),
-		FramesToNode:      m.FramesToNode.Load(),
+		Uptime:            m.Uptime(),
+		UptimeStr:         c.uptimeStr,
+		NodeConnected:     c.nodeConnected,
+		NodeAddress:       c.nodeAddress,
+		ActiveClients:     c.activeClients,
+		BytesFromNode:     c.bytesFromNode,
+		BytesToNode:       c.bytesToNode,
+		FramesFromNode:    c.framesFromNode,
+		FramesToNode:      c.framesToNode,
 		Messages:          m.Messages(),
 		TrafficSeries:     m.TrafficSeries(),
-		MessageTypeCounts: m.MessageTypeCounts(),
+		MessageTypeCounts: c.messageTypeCounts,
 
-		NodeReconnects:       m.NodeReconnects.Load(),
-		NodeConnectionErrors: m.NodeConnectionErrors.Load(),
+		NodeReconnects:       c.nodeReconnects,
+		NodeConnectionErrors: c.nodeConnectionErrors,
 
-		ConfigCacheFrames: m.ConfigCacheFrames.Load(),
-		ConfigCacheAge:    cacheAgeStr,
+		ConfigCacheFrames: c.configCacheFrames,
+		ConfigCacheAge:    c.configCacheAge,
 
-		ConfigReplaysFull:       m.ConfigReplaysFull.Load(),
-		ConfigReplaysConfigOnly: m.ConfigReplaysConfigOnly.Load(),
-		ConfigReplaysNodesOnly:  m.ConfigReplaysNodesOnly.Load(),
+		ConfigReplaysFull:       c.configReplaysFull,
+		ConfigReplaysConfigOnly: c.configReplaysConfigOnly,
+		ConfigReplaysNodesOnly:  c.configReplaysNodesOnly,
 
 		MaxTrafficSamples: m.maxSamples,
 	}
@@ -385,33 +428,28 @@ type SnapshotDelta struct {
 
 // SnapshotDelta returns a lightweight delta with the given latest traffic sample.
 func (m *Metrics) SnapshotDelta(sample TrafficSample) SnapshotDelta {
-	uptime := m.Uptime()
-	cacheAge := m.ConfigCacheAge()
-	cacheAgeStr := ""
-	if cacheAge > 0 {
-		cacheAgeStr = formatDuration(cacheAge)
-	}
+	c := m.readCounters()
 	return SnapshotDelta{
-		UptimeStr:         formatDuration(uptime),
-		NodeConnected:     m.NodeConnected.Load(),
-		NodeAddress:       m.NodeAddress,
-		ActiveClients:     m.ActiveClients.Load(),
-		BytesFromNode:     m.BytesFromNode.Load(),
-		BytesToNode:       m.BytesToNode.Load(),
-		FramesFromNode:    m.FramesFromNode.Load(),
-		FramesToNode:      m.FramesToNode.Load(),
+		UptimeStr:         c.uptimeStr,
+		NodeConnected:     c.nodeConnected,
+		NodeAddress:       c.nodeAddress,
+		ActiveClients:     c.activeClients,
+		BytesFromNode:     c.bytesFromNode,
+		BytesToNode:       c.bytesToNode,
+		FramesFromNode:    c.framesFromNode,
+		FramesToNode:      c.framesToNode,
 		LatestSample:      sample,
-		MessageTypeCounts: m.MessageTypeCounts(),
+		MessageTypeCounts: c.messageTypeCounts,
 
-		NodeReconnects:       m.NodeReconnects.Load(),
-		NodeConnectionErrors: m.NodeConnectionErrors.Load(),
+		NodeReconnects:       c.nodeReconnects,
+		NodeConnectionErrors: c.nodeConnectionErrors,
 
-		ConfigCacheFrames: m.ConfigCacheFrames.Load(),
-		ConfigCacheAge:    cacheAgeStr,
+		ConfigCacheFrames: c.configCacheFrames,
+		ConfigCacheAge:    c.configCacheAge,
 
-		ConfigReplaysFull:       m.ConfigReplaysFull.Load(),
-		ConfigReplaysConfigOnly: m.ConfigReplaysConfigOnly.Load(),
-		ConfigReplaysNodesOnly:  m.ConfigReplaysNodesOnly.Load(),
+		ConfigReplaysFull:       c.configReplaysFull,
+		ConfigReplaysConfigOnly: c.configReplaysConfigOnly,
+		ConfigReplaysNodesOnly:  c.configReplaysNodesOnly,
 	}
 }
 

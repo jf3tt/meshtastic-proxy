@@ -30,7 +30,7 @@ type Server struct {
 // NewServer creates a new web server.
 func NewServer(listenAddr string, m *metrics.Metrics, logger *slog.Logger, clientsFn func() []string) *Server {
 	funcMap := template.FuncMap{
-		"json": func(v interface{}) template.JS {
+		"json": func(v any) template.JS {
 			b, _ := json.Marshal(v)
 			return template.JS(b)
 		},
@@ -185,7 +185,7 @@ func (s *Server) handleAPIMetrics(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAPIClients(w http.ResponseWriter, r *http.Request) {
 	clients := s.clientsFn()
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]any{
 		"clients": clients,
 		"count":   len(clients),
 	}); err != nil {

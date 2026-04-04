@@ -23,6 +23,7 @@ data:
     [mdns]
     enabled = true
     instance = "Meshtastic Proxy"
+    hostname = "meshtastic-proxy"
     short_name = "PRXY"
     id = ""
     # Set to your host's LAN-facing interface so that mDNS is advertised

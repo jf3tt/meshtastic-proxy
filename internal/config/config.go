@@ -62,6 +62,7 @@ type LoggingConfig struct {
 type MDNSConfig struct {
 	Enabled    bool     `toml:"enabled"`    // enable mDNS advertisement
 	Instance   string   `toml:"instance"`   // mDNS instance name (e.g. "Meshtastic Proxy")
+	Hostname   string   `toml:"hostname"`   // mDNS hostname for SRV/A records (e.g. "meshtastic-proxy"); .local. suffix added automatically; empty = os.Hostname()
 	ShortName  string   `toml:"short_name"` // TXT record: node short name (4 chars)
 	ID         string   `toml:"id"`         // TXT record: node ID (e.g. "!deadbeef")
 	Interfaces []string `toml:"interfaces"` // network interfaces to advertise on (e.g. ["eth0"]); empty = auto-detect

@@ -59,6 +59,12 @@ enabled = true
 # Instance name shown in mDNS service browsers
 instance = "Meshtastic Proxy"
 
+# Hostname for mDNS SRV/A records (e.g. "meshtastic-proxy").
+# The ".local." suffix is added automatically if not already present.
+# When empty, os.Hostname() is used. This hostname appears in the SRV
+# target field; iOS requires it to be in the .local domain to resolve.
+# hostname = "meshtastic-proxy"
+
 # Short name for the node (max 4 characters, sent as TXT record)
 # This is displayed in the Meshtastic app alongside the node ID
 short_name = "PRXY"

@@ -48,29 +48,29 @@ func main() {
 	m.StartSampler(ctx)
 
 	// Create node connection
-	nodeConn := node.NewConnection(
-		cfg.Node.Address,
-		cfg.Node.ReconnectInterval.Duration,
-		cfg.Node.MaxReconnectInterval.Duration,
-		cfg.Node.DialTimeout.Duration,
-		cfg.Node.ReadTimeout.Duration,
-		cfg.Node.FromBuffer,
-		cfg.Node.ToBuffer,
-		m,
-		logger.With("component", "node"),
-	)
+	nodeConn := node.NewConnection(node.ConnectionOptions{
+		Address:              cfg.Node.Address,
+		ReconnectInterval:    cfg.Node.ReconnectInterval.Duration,
+		MaxReconnectInterval: cfg.Node.MaxReconnectInterval.Duration,
+		DialTimeout:          cfg.Node.DialTimeout.Duration,
+		ReadTimeout:          cfg.Node.ReadTimeout.Duration,
+		FromBuffer:           cfg.Node.FromBuffer,
+		ToBuffer:             cfg.Node.ToBuffer,
+		Metrics:              m,
+		Logger:               logger.With("component", "node"),
+	})
 
 	// Create proxy hub
-	proxyHub := proxy.New(
-		cfg.Proxy.Listen,
-		cfg.Proxy.MaxClients,
-		cfg.Proxy.ClientSendBuffer,
-		cfg.Proxy.ClientIdleTimeout.Duration,
-		cfg.Proxy.IOSNodeInfoDelay.Duration,
-		nodeConn,
-		m,
-		logger.With("component", "proxy"),
-	)
+	proxyHub := proxy.New(proxy.Options{
+		ListenAddr:        cfg.Proxy.Listen,
+		MaxClients:        cfg.Proxy.MaxClients,
+		ClientSendBuffer:  cfg.Proxy.ClientSendBuffer,
+		ClientIdleTimeout: cfg.Proxy.ClientIdleTimeout.Duration,
+		IOSNodeInfoDelay:  cfg.Proxy.IOSNodeInfoDelay.Duration,
+		NodeConn:          nodeConn,
+		Metrics:           m,
+		Logger:            logger.With("component", "proxy"),
+	})
 
 	// Start all components
 	errCh := make(chan error, 4)

@@ -209,7 +209,7 @@ func TestAPIClients_Empty(t *testing.T) {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
 
-	var result map[string]interface{}
+	var result map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
 		t.Fatalf("failed to decode JSON: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestAPIClients_WithClients(t *testing.T) {
 		t.Errorf("Content-Type = %q, want %q", ct, "application/json")
 	}
 
-	var result map[string]interface{}
+	var result map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
 		t.Fatalf("failed to decode JSON: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestAPIClients_WithClients(t *testing.T) {
 		t.Errorf("count = %v, want 2", result["count"])
 	}
 
-	clientsRaw, ok := result["clients"].([]interface{})
+	clientsRaw, ok := result["clients"].([]any)
 	if !ok || len(clientsRaw) != 2 {
 		t.Errorf("clients = %v, want 2 items", result["clients"])
 	}

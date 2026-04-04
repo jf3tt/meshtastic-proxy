@@ -10,6 +10,7 @@ import (
 
 	pb "buf.build/gen/go/meshtastic/protobufs/protocolbuffers/go/meshtastic"
 	"github.com/jfett/meshtastic-proxy/internal/metrics"
+	"github.com/jfett/meshtastic-proxy/internal/node"
 	"github.com/jfett/meshtastic-proxy/internal/protocol"
 	"google.golang.org/protobuf/proto"
 )
@@ -197,15 +198,14 @@ func (m *mockNodeConn) Sent() [][]byte {
 }
 
 // countFrameType counts how many frames of a given type are in a slice.
-func countFrameType(t *testing.T, frames [][]byte, typeName string) int {
+func countFrameType(t *testing.T, frames []parsedFrame, typeName string) int {
 	t.Helper()
 	count := 0
-	for _, frame := range frames {
-		msg := &pb.FromRadio{}
-		if err := proto.Unmarshal(frame, msg); err != nil {
+	for _, pf := range frames {
+		if pf.Msg == nil {
 			continue
 		}
-		if frameTypeName(msg) == typeName {
+		if node.FromRadioTypeName(pf.Msg) == typeName {
 			count++
 		}
 	}
@@ -213,13 +213,28 @@ func countFrameType(t *testing.T, frames [][]byte, typeName string) int {
 }
 
 // hasFrameType checks if a frame of a given type exists in the slice.
-func hasFrameType(t *testing.T, frames [][]byte, typeName string) bool {
+func hasFrameType(t *testing.T, frames []parsedFrame, typeName string) bool {
 	t.Helper()
 	return countFrameType(t, frames, typeName) > 0
 }
 
 // getNodeInfoNums returns all NodeInfo num values from the frames.
-func getNodeInfoNums(t *testing.T, frames [][]byte) []uint32 {
+func getNodeInfoNums(t *testing.T, frames []parsedFrame) []uint32 {
+	t.Helper()
+	var nums []uint32
+	for _, pf := range frames {
+		if pf.Msg == nil {
+			continue
+		}
+		if v, ok := pf.Msg.GetPayloadVariant().(*pb.FromRadio_NodeInfo); ok {
+			nums = append(nums, v.NodeInfo.GetNum())
+		}
+	}
+	return nums
+}
+
+// getNodeInfoNumsRaw returns all NodeInfo num values from raw wire frames.
+func getNodeInfoNumsRaw(t *testing.T, frames [][]byte) []uint32 {
 	t.Helper()
 	var nums []uint32
 	for _, frame := range frames {
@@ -232,6 +247,21 @@ func getNodeInfoNums(t *testing.T, frames [][]byte) []uint32 {
 		}
 	}
 	return nums
+}
+
+// hasFrameTypeRaw checks if a frame of a given type exists in raw wire frames.
+func hasFrameTypeRaw(t *testing.T, frames [][]byte, typeName string) bool {
+	t.Helper()
+	for _, frame := range frames {
+		msg := &pb.FromRadio{}
+		if err := proto.Unmarshal(frame, msg); err != nil {
+			continue
+		}
+		if node.FromRadioTypeName(msg) == typeName {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------------
@@ -572,7 +602,7 @@ func TestReplayCachedConfig_NonceSubstitution(t *testing.T) {
 	mockNode := newMockNodeConn(cache)
 
 	m := metrics.New(10, 300)
-	p := New(":0", 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
+	p := New(Options{ListenAddr: ":0", MaxClients: 10, ClientSendBuffer: 256, IOSNodeInfoDelay: 50 * time.Millisecond, NodeConn: mockNode, Metrics: m, Logger: slog.Default()})
 
 	serverConn, clientConn := newTestConnPair(t)
 	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
@@ -618,7 +648,7 @@ func TestReplayCachedConfig_ConfigOnly(t *testing.T) {
 	mockNode := newMockNodeConn(cache)
 
 	m := metrics.New(10, 300)
-	p := New(":0", 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
+	p := New(Options{ListenAddr: ":0", MaxClients: 10, ClientSendBuffer: 256, IOSNodeInfoDelay: 50 * time.Millisecond, NodeConn: mockNode, Metrics: m, Logger: slog.Default()})
 
 	serverConn, clientConn := newTestConnPair(t)
 	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
@@ -647,7 +677,7 @@ func TestReplayCachedConfig_ConfigOnly(t *testing.T) {
 	}
 
 	// Only own NodeInfo.
-	nodeNums := getNodeInfoNums(t, frames)
+	nodeNums := getNodeInfoNumsRaw(t, frames)
 	if len(nodeNums) != 1 || nodeNums[0] != myNum {
 		t.Errorf("config_only replay: NodeInfo nums = %v, want [%08x]", nodeNums, myNum)
 	}
@@ -660,7 +690,7 @@ func TestReplayCachedConfig_NodesOnly(t *testing.T) {
 	mockNode := newMockNodeConn(cache)
 
 	m := metrics.New(10, 300)
-	p := New(":0", 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
+	p := New(Options{ListenAddr: ":0", MaxClients: 10, ClientSendBuffer: 256, IOSNodeInfoDelay: 50 * time.Millisecond, NodeConn: mockNode, Metrics: m, Logger: slog.Default()})
 
 	serverConn, clientConn := newTestConnPair(t)
 	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
@@ -686,12 +716,12 @@ func TestReplayCachedConfig_NodesOnly(t *testing.T) {
 		t.Fatalf("nodes_only replay: got %d frames, want 4", len(frames))
 	}
 
-	nodeNums := getNodeInfoNums(t, frames)
+	nodeNums := getNodeInfoNumsRaw(t, frames)
 	if len(nodeNums) != 3 {
 		t.Errorf("nodes_only replay: got %d NodeInfo frames, want 3", len(nodeNums))
 	}
 
-	if !hasFrameType(t, frames, "config_complete_id") {
+	if !hasFrameTypeRaw(t, frames, "config_complete_id") {
 		t.Error("nodes_only replay: missing config_complete_id")
 	}
 }
@@ -700,7 +730,7 @@ func TestReplayCachedConfig_EmptyCache(t *testing.T) {
 	mockNode := newMockNodeConn(nil) // empty cache
 
 	m := metrics.New(10, 300)
-	p := New(":0", 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
+	p := New(Options{ListenAddr: ":0", MaxClients: 10, ClientSendBuffer: 256, IOSNodeInfoDelay: 50 * time.Millisecond, NodeConn: mockNode, Metrics: m, Logger: slog.Default()})
 
 	serverConn, clientConn := newTestConnPair(t)
 	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
@@ -730,7 +760,7 @@ func TestReplayCachedConfig_ClientDisconnect(t *testing.T) {
 	mockNode := newMockNodeConn(cache)
 
 	m := metrics.New(10, 300)
-	p := New(":0", 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
+	p := New(Options{ListenAddr: ":0", MaxClients: 10, ClientSendBuffer: 256, IOSNodeInfoDelay: 50 * time.Millisecond, NodeConn: mockNode, Metrics: m, Logger: slog.Default()})
 
 	_, clientConn := newTestConnPair(t)
 	closeCalled := make(chan struct{})
@@ -761,7 +791,7 @@ func TestInterception_WantConfigIdNotForwarded(t *testing.T) {
 	mockNode := newMockNodeConn(cache)
 
 	m := metrics.New(10, 300)
-	p := New(":0", 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
+	p := New(Options{ListenAddr: ":0", MaxClients: 10, ClientSendBuffer: 256, IOSNodeInfoDelay: 50 * time.Millisecond, NodeConn: mockNode, Metrics: m, Logger: slog.Default()})
 
 	// Use handleNewConnection which sets up the interception callback.
 	serverConn, clientConn := newTestConnPair(t)
@@ -815,7 +845,7 @@ func TestInterception_DisconnectNotForwarded(t *testing.T) {
 	mockNode := newMockNodeConn(nil) // no cache needed for disconnect test
 
 	m := metrics.New(10, 300)
-	p := New(":0", 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
+	p := New(Options{ListenAddr: ":0", MaxClients: 10, ClientSendBuffer: 256, IOSNodeInfoDelay: 50 * time.Millisecond, NodeConn: mockNode, Metrics: m, Logger: slog.Default()})
 
 	serverConn, clientConn := newTestConnPair(t)
 
@@ -854,7 +884,7 @@ func TestInterception_RegularPacketForwarded(t *testing.T) {
 	mockNode := newMockNodeConn(nil)
 
 	m := metrics.New(10, 300)
-	p := New(":0", 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
+	p := New(Options{ListenAddr: ":0", MaxClients: 10, ClientSendBuffer: 256, IOSNodeInfoDelay: 50 * time.Millisecond, NodeConn: mockNode, Metrics: m, Logger: slog.Default()})
 
 	serverConn, clientConn := newTestConnPair(t)
 
@@ -895,17 +925,13 @@ func TestInterception_RegularPacketForwarded(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// frameTypeName tests
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
 // broadcast tests
 // ---------------------------------------------------------------------------
 
 func TestBroadcast_SendsToAllClients(t *testing.T) {
 	mockNode := newMockNodeConn(nil)
 	m := metrics.New(10, 300)
-	p := New(":0", 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
+	p := New(Options{ListenAddr: ":0", MaxClients: 10, ClientSendBuffer: 256, IOSNodeInfoDelay: 50 * time.Millisecond, NodeConn: mockNode, Metrics: m, Logger: slog.Default()})
 
 	const numClients = 3
 	type clientPair struct {
@@ -939,7 +965,7 @@ func TestBroadcast_SendsToAllClients(t *testing.T) {
 func TestBroadcast_NoClientsNoPanic(t *testing.T) {
 	mockNode := newMockNodeConn(nil)
 	m := metrics.New(10, 300)
-	p := New(":0", 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
+	p := New(Options{ListenAddr: ":0", MaxClients: 10, ClientSendBuffer: 256, IOSNodeInfoDelay: 50 * time.Millisecond, NodeConn: mockNode, Metrics: m, Logger: slog.Default()})
 
 	// Should not panic with empty client map.
 	p.broadcast([]byte("no-clients"))
@@ -949,7 +975,7 @@ func TestBroadcast_SkipsSlowConsumer(t *testing.T) {
 	mockNode := newMockNodeConn(nil)
 	m := metrics.New(10, 300)
 	// Use a very small send buffer (1) to trigger slow consumer easily.
-	p := New(":0", 10, 1, 0, 50*time.Millisecond, mockNode, m, slog.Default())
+	p := New(Options{ListenAddr: ":0", MaxClients: 10, ClientSendBuffer: 1, IOSNodeInfoDelay: 50 * time.Millisecond, NodeConn: mockNode, Metrics: m, Logger: slog.Default()})
 
 	_, clientConn := newTestConnPair(t)
 	closeCalled := make(chan struct{}, 1)
@@ -983,7 +1009,7 @@ func TestBroadcast_SkipsSlowConsumer(t *testing.T) {
 func TestBroadcastLoop_ForwardsFromNode(t *testing.T) {
 	mockNode := newMockNodeConn(nil)
 	m := metrics.New(10, 300)
-	p := New(":0", 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
+	p := New(Options{ListenAddr: ":0", MaxClients: 10, ClientSendBuffer: 256, IOSNodeInfoDelay: 50 * time.Millisecond, NodeConn: mockNode, Metrics: m, Logger: slog.Default()})
 
 	// Register a client.
 	serverConn, clientConn := newTestConnPair(t)
@@ -1021,7 +1047,7 @@ func TestBroadcastLoop_ForwardsFromNode(t *testing.T) {
 func TestBroadcastLoop_MultipleFrames(t *testing.T) {
 	mockNode := newMockNodeConn(nil)
 	m := metrics.New(10, 300)
-	p := New(":0", 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
+	p := New(Options{ListenAddr: ":0", MaxClients: 10, ClientSendBuffer: 256, IOSNodeInfoDelay: 50 * time.Millisecond, NodeConn: mockNode, Metrics: m, Logger: slog.Default()})
 
 	serverConn, clientConn := newTestConnPair(t)
 	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
@@ -1063,7 +1089,7 @@ func TestBroadcastLoop_MultipleFrames(t *testing.T) {
 func TestBroadcastLoop_ContextCancel(t *testing.T) {
 	mockNode := newMockNodeConn(nil)
 	m := metrics.New(10, 300)
-	p := New(":0", 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
+	p := New(Options{ListenAddr: ":0", MaxClients: 10, ClientSendBuffer: 256, IOSNodeInfoDelay: 50 * time.Millisecond, NodeConn: mockNode, Metrics: m, Logger: slog.Default()})
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -1087,7 +1113,7 @@ func TestBroadcastLoop_ContextCancel(t *testing.T) {
 func TestBroadcastLoop_BroadcastsToMultipleClients(t *testing.T) {
 	mockNode := newMockNodeConn(nil)
 	m := metrics.New(10, 300)
-	p := New(":0", 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
+	p := New(Options{ListenAddr: ":0", MaxClients: 10, ClientSendBuffer: 256, IOSNodeInfoDelay: 50 * time.Millisecond, NodeConn: mockNode, Metrics: m, Logger: slog.Default()})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1139,7 +1165,7 @@ func TestRun_AcceptsConnections(t *testing.T) {
 	addr := ln.Addr().String()
 	_ = ln.Close()
 
-	p := New(addr, 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
+	p := New(Options{ListenAddr: addr, MaxClients: 10, ClientSendBuffer: 256, IOSNodeInfoDelay: 50 * time.Millisecond, NodeConn: mockNode, Metrics: m, Logger: slog.Default()})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1183,7 +1209,7 @@ func TestRun_MaxClientsRejected(t *testing.T) {
 	_ = ln.Close()
 
 	// maxClients = 1
-	p := New(addr, 1, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
+	p := New(Options{ListenAddr: addr, MaxClients: 1, ClientSendBuffer: 256, IOSNodeInfoDelay: 50 * time.Millisecond, NodeConn: mockNode, Metrics: m, Logger: slog.Default()})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1232,7 +1258,7 @@ func TestRun_GracefulShutdown(t *testing.T) {
 	addr := ln.Addr().String()
 	_ = ln.Close()
 
-	p := New(addr, 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
+	p := New(Options{ListenAddr: addr, MaxClients: 10, ClientSendBuffer: 256, IOSNodeInfoDelay: 50 * time.Millisecond, NodeConn: mockNode, Metrics: m, Logger: slog.Default()})
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -1287,7 +1313,7 @@ func TestRun_BroadcastToClients(t *testing.T) {
 	addr := ln.Addr().String()
 	_ = ln.Close()
 
-	p := New(addr, 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
+	p := New(Options{ListenAddr: addr, MaxClients: 10, ClientSendBuffer: 256, IOSNodeInfoDelay: 50 * time.Millisecond, NodeConn: mockNode, Metrics: m, Logger: slog.Default()})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1348,7 +1374,7 @@ func TestRun_ClientDisconnectUnregisters(t *testing.T) {
 	addr := ln.Addr().String()
 	_ = ln.Close()
 
-	p := New(addr, 10, 256, 0, 50*time.Millisecond, mockNode, m, slog.Default())
+	p := New(Options{ListenAddr: addr, MaxClients: 10, ClientSendBuffer: 256, IOSNodeInfoDelay: 50 * time.Millisecond, NodeConn: mockNode, Metrics: m, Logger: slog.Default()})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1374,10 +1400,10 @@ func TestRun_ClientDisconnectUnregisters(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// frameTypeName tests
+// node.FromRadioTypeName tests (integration — verifies proxy uses it correctly)
 // ---------------------------------------------------------------------------
 
-func TestFrameTypeName(t *testing.T) {
+func TestFromRadioTypeName(t *testing.T) {
 	tests := []struct {
 		name string
 		msg  *pb.FromRadio
@@ -1399,9 +1425,9 @@ func TestFrameTypeName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := frameTypeName(tt.msg)
+			got := node.FromRadioTypeName(tt.msg)
 			if got != tt.want {
-				t.Errorf("frameTypeName() = %q, want %q", got, tt.want)
+				t.Errorf("FromRadioTypeName() = %q, want %q", got, tt.want)
 			}
 		})
 	}

@@ -10,6 +10,7 @@ import (
 
 	pb "buf.build/gen/go/meshtastic/protobufs/protocolbuffers/go/meshtastic"
 	"github.com/jfett/meshtastic-proxy/internal/metrics"
+	"github.com/jfett/meshtastic-proxy/internal/node"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -45,17 +46,29 @@ type Proxy struct {
 	wg      sync.WaitGroup // tracks client goroutines for graceful shutdown
 }
 
+// Options holds all configuration for creating a new Proxy.
+type Options struct {
+	ListenAddr        string
+	MaxClients        int
+	ClientSendBuffer  int
+	ClientIdleTimeout time.Duration
+	IOSNodeInfoDelay  time.Duration
+	NodeConn          NodeConnection
+	Metrics           *metrics.Metrics
+	Logger            *slog.Logger
+}
+
 // New creates a new Proxy instance.
-func New(listenAddr string, maxClients, clientSendBuffer int, clientIdleTimeout, iosNodeInfoDelay time.Duration, nodeConn NodeConnection, m *metrics.Metrics, logger *slog.Logger) *Proxy {
+func New(opts Options) *Proxy {
 	return &Proxy{
-		listenAddr:        listenAddr,
-		maxClients:        maxClients,
-		clientSendBuffer:  clientSendBuffer,
-		clientIdleTimeout: clientIdleTimeout,
-		iosNodeInfoDelay:  iosNodeInfoDelay,
-		nodeConn:          nodeConn,
-		metrics:           m,
-		logger:            logger,
+		listenAddr:        opts.ListenAddr,
+		maxClients:        opts.MaxClients,
+		clientSendBuffer:  opts.ClientSendBuffer,
+		clientIdleTimeout: opts.ClientIdleTimeout,
+		iosNodeInfoDelay:  opts.IOSNodeInfoDelay,
+		nodeConn:          opts.NodeConn,
+		metrics:           opts.Metrics,
+		logger:            opts.Logger,
 		clients:           make(map[*Client]struct{}),
 	}
 }
@@ -281,24 +294,24 @@ func (p *Proxy) replayCachedConfig(c *Client, clientNonce uint32) {
 	)
 
 	sent := 0
-	for _, frame := range result.Frames {
-		// Log each frame type for diagnostics.
-		outFrame := frame
-		msg := &pb.FromRadio{}
-		if err := proto.Unmarshal(frame, msg); err == nil {
+	for _, pf := range result.Frames {
+		outFrame := pf.Raw
+
+		if pf.Msg != nil {
 			p.logger.Debug("replaying frame",
 				"client", c.Addr(),
 				"seq", sent,
-				"type", frameTypeName(msg),
+				"type", node.FromRadioTypeName(pf.Msg),
 			)
 
-			if _, ok := msg.GetPayloadVariant().(*pb.FromRadio_ConfigCompleteId); ok {
+			if _, ok := pf.Msg.GetPayloadVariant().(*pb.FromRadio_ConfigCompleteId); ok {
 				// Replace nonce with the client's nonce.
-				msg.PayloadVariant = &pb.FromRadio_ConfigCompleteId{
+				patched := proto.Clone(pf.Msg).(*pb.FromRadio)
+				patched.PayloadVariant = &pb.FromRadio_ConfigCompleteId{
 					ConfigCompleteId: clientNonce,
 				}
-				if patched, err := proto.Marshal(msg); err == nil {
-					outFrame = patched
+				if raw, err := proto.Marshal(patched); err == nil {
+					outFrame = raw
 				}
 			}
 		}
@@ -316,8 +329,8 @@ func (p *Proxy) replayCachedConfig(c *Client, clientNonce uint32) {
 		// After sending the connected node's own NodeInfo during config-only
 		// replay, pause briefly so the iOS app's CoreData viewContext can merge
 		// the newly created NodeInfoEntity before ConfigCompleteId arrives.
-		if clientNonce == nonceOnlyConfig {
-			if ni, ok := msg.GetPayloadVariant().(*pb.FromRadio_NodeInfo); ok &&
+		if clientNonce == nonceOnlyConfig && pf.Msg != nil {
+			if ni, ok := pf.Msg.GetPayloadVariant().(*pb.FromRadio_NodeInfo); ok &&
 				ni.NodeInfo.GetNum() == result.Stats.MyNodeNum {
 				p.logger.Debug("pausing after own NodeInfo for CoreData sync",
 					"client", c.Addr(),
@@ -337,40 +350,6 @@ func (p *Proxy) replayCachedConfig(c *Client, clientNonce uint32) {
 	)
 }
 
-// frameTypeName returns a short string identifying the FromRadio payload type.
-func frameTypeName(msg *pb.FromRadio) string {
-	switch msg.GetPayloadVariant().(type) {
-	case *pb.FromRadio_MyInfo:
-		return "my_info"
-	case *pb.FromRadio_NodeInfo:
-		return "node_info"
-	case *pb.FromRadio_Config:
-		return "config"
-	case *pb.FromRadio_ModuleConfig:
-		return "module_config"
-	case *pb.FromRadio_Channel:
-		return "channel"
-	case *pb.FromRadio_ConfigCompleteId:
-		return "config_complete_id"
-	case *pb.FromRadio_Metadata:
-		return "metadata"
-	case *pb.FromRadio_DeviceuiConfig:
-		return "deviceui_config"
-	case *pb.FromRadio_FileInfo:
-		return "file_info"
-	case *pb.FromRadio_Packet:
-		return "packet"
-	case *pb.FromRadio_QueueStatus:
-		return "queue_status"
-	case *pb.FromRadio_LogRecord:
-		return "log_record"
-	case *pb.FromRadio_Rebooted:
-		return "rebooted"
-	default:
-		return "unknown"
-	}
-}
-
 // filterStats contains diagnostic information about a filterConfigCache operation.
 type filterStats struct {
 	MyNodeNum    uint32
@@ -378,9 +357,16 @@ type filterStats struct {
 	FrameCounts  map[string]int
 }
 
+// parsedFrame holds a raw frame alongside its pre-parsed protobuf message.
+// If Msg is nil, the frame could not be parsed.
+type parsedFrame struct {
+	Raw []byte
+	Msg *pb.FromRadio
+}
+
 // filterResult contains filtered config frames and diagnostic statistics.
 type filterResult struct {
-	Frames [][]byte
+	Frames []parsedFrame
 	Stats  filterStats
 }
 
@@ -397,59 +383,67 @@ func filterConfigCache(frames [][]byte, nonce uint32) filterResult {
 		FrameCounts: make(map[string]int),
 	}
 
+	// Parse all frames once upfront.
+	parsed := make([]parsedFrame, len(frames))
+	for i, frame := range frames {
+		msg := &pb.FromRadio{}
+		if err := proto.Unmarshal(frame, msg); err != nil {
+			parsed[i] = parsedFrame{Raw: frame, Msg: nil}
+		} else {
+			parsed[i] = parsedFrame{Raw: frame, Msg: msg}
+		}
+	}
+
 	if nonce != nonceOnlyConfig && nonce != nonceOnlyNodes {
 		// Full config — count frame types for diagnostics.
-		for _, frame := range frames {
-			msg := &pb.FromRadio{}
-			if err := proto.Unmarshal(frame, msg); err != nil {
+		for _, pf := range parsed {
+			if pf.Msg == nil {
 				stats.FrameCounts["unparseable"]++
-				continue
+			} else {
+				stats.FrameCounts[node.FromRadioTypeName(pf.Msg)]++
 			}
-			stats.FrameCounts[frameTypeName(msg)]++
 		}
-		return filterResult{Frames: frames, Stats: stats}
+		return filterResult{Frames: parsed, Stats: stats}
 	}
 
 	// Find my_node_num so we can identify own NodeInfo.
-	for _, frame := range frames {
-		msg := &pb.FromRadio{}
-		if err := proto.Unmarshal(frame, msg); err != nil {
+	for _, pf := range parsed {
+		if pf.Msg == nil {
 			continue
 		}
-		if v, ok := msg.GetPayloadVariant().(*pb.FromRadio_MyInfo); ok {
+		if v, ok := pf.Msg.GetPayloadVariant().(*pb.FromRadio_MyInfo); ok {
 			stats.MyNodeNum = v.MyInfo.GetMyNodeNum()
 			break
 		}
 	}
 
-	result := make([][]byte, 0, len(frames))
-	for _, frame := range frames {
-		msg := &pb.FromRadio{}
-		if err := proto.Unmarshal(frame, msg); err != nil {
-			result = append(result, frame) // keep unparseable frames
+	result := make([]parsedFrame, 0, len(parsed))
+	for _, pf := range parsed {
+		if pf.Msg == nil {
+			result = append(result, pf) // keep unparseable frames
 			stats.FrameCounts["unparseable"]++
 			continue
 		}
 
-		typeName := frameTypeName(msg)
+		typeName := node.FromRadioTypeName(pf.Msg)
 
-		switch v := msg.GetPayloadVariant().(type) {
+		switch v := pf.Msg.GetPayloadVariant().(type) {
 		case *pb.FromRadio_ConfigCompleteId:
 			// Always included — nonce is patched later by replayCachedConfig.
-			result = append(result, frame)
+			result = append(result, pf)
 			stats.FrameCounts[typeName]++
 
 		case *pb.FromRadio_NodeInfo:
 			if nonce == nonceOnlyConfig {
 				// Config-only: include own NodeInfo, skip others.
 				if v.NodeInfo.GetNum() == stats.MyNodeNum {
-					result = append(result, frame)
+					result = append(result, pf)
 					stats.OwnNodeFound = true
 					stats.FrameCounts[typeName]++
 				}
 			} else {
 				// Nodes-only: include all NodeInfo.
-				result = append(result, frame)
+				result = append(result, pf)
 				stats.FrameCounts[typeName]++
 			}
 
@@ -462,14 +456,14 @@ func filterConfigCache(frames [][]byte, nonce uint32) filterResult {
 			*pb.FromRadio_FileInfo:
 			// Config frames — include for config-only, skip for nodes-only.
 			if nonce == nonceOnlyConfig {
-				result = append(result, frame)
+				result = append(result, pf)
 				stats.FrameCounts[typeName]++
 			}
 
 		default:
 			// Unknown types: include for config-only (conservative).
 			if nonce == nonceOnlyConfig {
-				result = append(result, frame)
+				result = append(result, pf)
 				stats.FrameCounts[typeName]++
 			}
 		}

@@ -107,6 +107,15 @@ All other `ToRadio` frames are forwarded to the node as-is.
 
 `discovery.Advertiser` creates a separate `*mdns.Server` per configured network interface. The `hashicorp/mdns` library only supports one `*net.Interface` per server. When `interfaces` config is empty, a single server with system-default interface is used.
 
+### mDNS Hostname (.local Domain)
+
+The mDNS SRV/A records **must** use a hostname in the `.local` domain (RFC 6762). iOS `NWBrowser` will not resolve hostnames outside `.local`. The `mdnsHostname()` function in `internal/discovery/advertiser.go` ensures this:
+
+1. If `mdns.hostname` is set in config, use it (`.local.` appended automatically if missing).
+2. If empty, fall back to `os.Hostname()` with `.local.` appended.
+
+Without this, the hostname defaults to the bare OS hostname (e.g. `talos-worker-01.`) which iOS cannot resolve via mDNS, causing auto-discovery to silently fail.
+
 ### hostNetwork in Kubernetes
 
 mDNS multicast cannot traverse Kubernetes overlay networks. The deployment uses `hostNetwork: true` and the namespace has `pod-security.kubernetes.io/enforce: privileged` because the `baseline` Pod Security Standard blocks hostNetwork.

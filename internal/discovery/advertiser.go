@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/hashicorp/mdns"
@@ -24,7 +26,7 @@ type Advertiser struct {
 	cfg     config.MDNSConfig
 	port    int
 	logger  *slog.Logger
-	mu      sync.Mutex
+	mu      sync.RWMutex
 	servers []*mdns.Server
 }
 
@@ -61,6 +63,40 @@ func (a *Advertiser) buildTXTRecords() []string {
 	txt = append(txt, "pio_env=proxy")
 
 	return txt
+}
+
+// mdnsHostname returns the fully-qualified hostname for mDNS SRV/A records.
+// The result always ends with ".local." as required by RFC 6762.
+//
+// Resolution order:
+//  1. If cfg.Hostname is set, use it (strip any trailing dots, append ".local.").
+//  2. Otherwise, use os.Hostname() with ".local." appended.
+//
+// Examples:
+//
+//	cfg.Hostname = "meshtastic-proxy"  → "meshtastic-proxy.local."
+//	cfg.Hostname = "myhost.local"      → "myhost.local."     (already .local)
+//	cfg.Hostname = ""                  → "<os-hostname>.local."
+func mdnsHostname(cfg config.MDNSConfig) (string, error) {
+	h := cfg.Hostname
+	if h == "" {
+		var err error
+		h, err = os.Hostname()
+		if err != nil {
+			return "", fmt.Errorf("determining hostname: %w", err)
+		}
+	}
+
+	// Strip any trailing dots for uniform processing.
+	h = strings.TrimRight(h, ".")
+
+	// Append .local if not already present.
+	if !strings.HasSuffix(h, ".local") {
+		h += ".local"
+	}
+
+	// FQDN must end with a dot.
+	return h + ".", nil
 }
 
 // interfaceIPs returns the unicast IP addresses assigned to the given interface.
@@ -110,15 +146,19 @@ func (a *Advertiser) startServer(iface *net.Interface) (*mdns.Server, error) {
 		ifaceName = "default"
 	}
 
+	hostName, err := mdnsHostname(a.cfg)
+	if err != nil {
+		return nil, fmt.Errorf("resolving mDNS hostname: %w", err)
+	}
+
 	// Create the mDNS service zone.
 	// service type "_meshtastic._tcp" matches what the Meshtastic firmware advertises.
 	// domain "" defaults to "local."
-	// hostName "" defaults to os.Hostname()
 	service, err := mdns.NewMDNSService(
 		a.cfg.Instance,     // instance name (e.g. "Meshtastic Proxy")
 		"_meshtastic._tcp", // service type
 		"",                 // domain (defaults to "local.")
-		"",                 // hostName (defaults to os.Hostname())
+		hostName,           // FQDN hostname (e.g. "talos-worker-01.local.")
 		a.port,             // port
 		ips,                // IPs (nil = auto-detect from hostname)
 		txt,                // TXT records
@@ -197,8 +237,8 @@ func (a *Advertiser) Run(ctx context.Context) error {
 // ServerCount returns the number of running mDNS servers.
 // Safe for concurrent use.
 func (a *Advertiser) ServerCount() int {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 	return len(a.servers)
 }
 

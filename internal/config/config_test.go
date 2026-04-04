@@ -51,6 +51,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.MDNS.Instance != "Meshtastic Proxy" {
 		t.Fatalf("unexpected default mdns instance: %s", cfg.MDNS.Instance)
 	}
+	if cfg.MDNS.Hostname != "" {
+		t.Fatalf("expected empty default mdns hostname, got: %s", cfg.MDNS.Hostname)
+	}
 	if cfg.MDNS.ShortName != "PRXY" {
 		t.Fatalf("unexpected default mdns short_name: %s", cfg.MDNS.ShortName)
 	}
@@ -90,6 +93,7 @@ enabled = false
 [mdns]
 enabled = true
 instance = "My Node"
+hostname = "my-proxy"
 short_name = "TEST"
 id = "!aabbccdd"
 interfaces = ["eth0", "wlan0"]
@@ -139,6 +143,9 @@ format = "json"
 	}
 	if cfg.MDNS.Instance != "My Node" {
 		t.Fatalf("unexpected mdns instance: %s", cfg.MDNS.Instance)
+	}
+	if cfg.MDNS.Hostname != "my-proxy" {
+		t.Fatalf("unexpected mdns hostname: %s", cfg.MDNS.Hostname)
 	}
 	if cfg.MDNS.ShortName != "TEST" {
 		t.Fatalf("unexpected mdns short_name: %s", cfg.MDNS.ShortName)

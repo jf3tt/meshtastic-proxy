@@ -350,6 +350,63 @@ func TestRunWithInvalidInterface(t *testing.T) {
 	}
 }
 
+func TestMdnsHostname(t *testing.T) {
+	osHost, err := os.Hostname()
+	if err != nil {
+		t.Fatalf("os.Hostname failed: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		hostname string // config value
+		want     string
+	}{
+		{
+			name:     "empty falls back to os.Hostname",
+			hostname: "",
+			want:     osHost + ".local.",
+		},
+		{
+			name:     "plain hostname gets .local.",
+			hostname: "meshtastic-proxy",
+			want:     "meshtastic-proxy.local.",
+		},
+		{
+			name:     "hostname already .local",
+			hostname: "myhost.local",
+			want:     "myhost.local.",
+		},
+		{
+			name:     "hostname with trailing dot",
+			hostname: "myhost.",
+			want:     "myhost.local.",
+		},
+		{
+			name:     "hostname already .local.",
+			hostname: "myhost.local.",
+			want:     "myhost.local.",
+		},
+		{
+			name:     "hostname with subdomain",
+			hostname: "proxy.mesh",
+			want:     "proxy.mesh.local.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.MDNSConfig{Hostname: tt.hostname}
+			got, err := mdnsHostname(cfg)
+			if err != nil {
+				t.Fatalf("mdnsHostname() error: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("mdnsHostname(%q) = %q, want %q", tt.hostname, got, tt.want)
+			}
+		})
+	}
+}
+
 // findMulticastInterface returns the name of a non-loopback, up, multicast-capable
 // interface with at least one usable IP. Skips the test if none is found.
 func findMulticastInterface(t *testing.T) string {

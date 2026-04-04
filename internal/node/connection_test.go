@@ -98,17 +98,17 @@ func readFrame(t *testing.T, conn net.Conn, timeout time.Duration) []byte {
 
 // newTestConnection creates a Connection with typical test parameters.
 func newTestConnection(address string, m *metrics.Metrics) *Connection {
-	return NewConnection(
-		address,
-		10*time.Millisecond,  // reconnectInterval
-		100*time.Millisecond, // maxReconnectInterval
-		5*time.Second,        // dialTimeout
-		5*time.Minute,        // readTimeout
-		256,                  // fromBuffer
-		256,                  // toBuffer
-		m,
-		slog.Default(),
-	)
+	return NewConnection(ConnectionOptions{
+		Address:              address,
+		ReconnectInterval:    10 * time.Millisecond,
+		MaxReconnectInterval: 100 * time.Millisecond,
+		DialTimeout:          5 * time.Second,
+		ReadTimeout:          5 * time.Minute,
+		FromBuffer:           256,
+		ToBuffer:             256,
+		Metrics:              m,
+		Logger:               slog.Default(),
+	})
 }
 
 // buildConfigSequence creates a config sequence: MyInfo, Config, NodeInfo, ConfigCompleteId.
@@ -160,17 +160,17 @@ func buildConfigSequence(t *testing.T, myNodeNum uint32) [][]byte {
 
 func TestNewConnection(t *testing.T) {
 	m := metrics.New(10, 300)
-	c := NewConnection(
-		"192.168.1.1:4403",
-		5*time.Second,
-		60*time.Second,
-		10*time.Second,
-		5*time.Minute,
-		128,
-		64,
-		m,
-		slog.Default(),
-	)
+	c := NewConnection(ConnectionOptions{
+		Address:              "192.168.1.1:4403",
+		ReconnectInterval:    5 * time.Second,
+		MaxReconnectInterval: 60 * time.Second,
+		DialTimeout:          10 * time.Second,
+		ReadTimeout:          5 * time.Minute,
+		FromBuffer:           128,
+		ToBuffer:             64,
+		Metrics:              m,
+		Logger:               slog.Default(),
+	})
 
 	if c.address != "192.168.1.1:4403" {
 		t.Errorf("address = %q, want %q", c.address, "192.168.1.1:4403")
@@ -304,13 +304,17 @@ func TestSend_Success(t *testing.T) {
 func TestSend_ChannelFull(t *testing.T) {
 	m := metrics.New(10, 300)
 	// Create connection with tiny toNode buffer.
-	c := NewConnection(
-		"127.0.0.1:0",
-		time.Second, time.Minute,
-		5*time.Second, 5*time.Minute,
-		256, 2, // toBuffer = 2
-		m, slog.Default(),
-	)
+	c := NewConnection(ConnectionOptions{
+		Address:              "127.0.0.1:0",
+		ReconnectInterval:    time.Second,
+		MaxReconnectInterval: time.Minute,
+		DialTimeout:          5 * time.Second,
+		ReadTimeout:          5 * time.Minute,
+		FromBuffer:           256,
+		ToBuffer:             2, // tiny toBuffer
+		Metrics:              m,
+		Logger:               slog.Default(),
+	})
 
 	payload := []byte{0x01, 0x02}
 
@@ -813,15 +817,17 @@ func TestRun_DialFailureIncrementsErrors(t *testing.T) {
 	addr := ln.Addr().String()
 	_ = ln.Close()
 
-	c := NewConnection(
-		addr,
-		10*time.Millisecond,  // fast reconnect for test
-		50*time.Millisecond,  // low max
-		100*time.Millisecond, // short dial timeout
-		5*time.Minute,
-		256, 256,
-		m, slog.Default(),
-	)
+	c := NewConnection(ConnectionOptions{
+		Address:              addr,
+		ReconnectInterval:    10 * time.Millisecond,  // fast reconnect for test
+		MaxReconnectInterval: 50 * time.Millisecond,  // low max
+		DialTimeout:          100 * time.Millisecond, // short dial timeout
+		ReadTimeout:          5 * time.Minute,
+		FromBuffer:           256,
+		ToBuffer:             256,
+		Metrics:              m,
+		Logger:               slog.Default(),
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -1279,7 +1285,7 @@ func TestDecodeToRadio_InvalidPayload(t *testing.T) {
 func TestCountCacheFrameTypes(t *testing.T) {
 	frames := buildConfigSequence(t, 0x12345678)
 
-	counts := countCacheFrameTypes(frames)
+	counts := CountCacheFrameTypes(frames)
 
 	want := map[string]int{
 		"my_info":            1,
@@ -1302,7 +1308,7 @@ func TestCountCacheFrameTypes(t *testing.T) {
 }
 
 func TestCountCacheFrameTypes_Empty(t *testing.T) {
-	counts := countCacheFrameTypes(nil)
+	counts := CountCacheFrameTypes(nil)
 	if len(counts) != 0 {
 		t.Errorf("expected empty map, got %v", counts)
 	}
@@ -1313,7 +1319,7 @@ func TestCountCacheFrameTypes_Unparseable(t *testing.T) {
 		{0xFF, 0xFF, 0xFF}, // garbage
 	}
 
-	counts := countCacheFrameTypes(frames)
+	counts := CountCacheFrameTypes(frames)
 	if counts["unparseable"] != 1 {
 		t.Errorf("counts[unparseable] = %d, want 1", counts["unparseable"])
 	}

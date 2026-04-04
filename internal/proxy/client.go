@@ -110,15 +110,6 @@ func (c *Client) Send(payload []byte) bool {
 	}
 }
 
-// WriteDirect writes a frame directly to the underlying connection,
-// bypassing the send channel. It is intended for replaying cached config
-// frames BEFORE Start is called, when the connection is not yet shared
-// with any goroutine. It must NOT be called concurrently with Start or
-// the write loop.
-func (c *Client) WriteDirect(payload []byte) error {
-	return protocol.WriteFrame(c.conn, payload)
-}
-
 // Start launches the client read and write loops as background goroutines.
 // It returns immediately. The write loop begins draining the send channel
 // as soon as Start returns, so it is safe to call Send (including cached
