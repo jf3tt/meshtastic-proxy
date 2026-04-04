@@ -99,6 +99,11 @@ func main() {
 			logger.With("component", "web"),
 			proxyHub.ClientAddrs,
 			promHandler,
+			web.WithChatSupport(
+				proxyHub.SendToNode,
+				nodeConn.ConfigCache,
+				nodeConn.MyNodeNum,
+			),
 		)
 		go func() {
 			errCh <- webServer.Run(ctx)

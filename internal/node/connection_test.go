@@ -2635,3 +2635,330 @@ func TestExtractSignal_RssiOnlyNoSnr(t *testing.T) {
 		t.Errorf("RxSnr = %f, want 0", sig.RxSnr)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// ExtractChatMessage (FromRadio) tests
+// ---------------------------------------------------------------------------
+
+func TestExtractChatMessage_ValidTextMessage(t *testing.T) {
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From:    0xAABBCCDD,
+				To:      0xFFFFFFFF,
+				Channel: 0,
+				RxRssi:  -85,
+				RxSnr:   7.5,
+				ViaMqtt: true,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum: pb.PortNum_TEXT_MESSAGE_APP,
+						Payload: []byte("Hello mesh!"),
+					},
+				},
+			},
+		},
+	})
+
+	chat := ExtractChatMessage(payload)
+	if chat == nil {
+		t.Fatal("expected non-nil ChatMessageData")
+	}
+	if chat.From != 0xAABBCCDD {
+		t.Errorf("From = %d, want %d", chat.From, uint32(0xAABBCCDD))
+	}
+	if chat.To != 0xFFFFFFFF {
+		t.Errorf("To = %d, want %d", chat.To, uint32(0xFFFFFFFF))
+	}
+	if chat.Channel != 0 {
+		t.Errorf("Channel = %d, want 0", chat.Channel)
+	}
+	if chat.Text != "Hello mesh!" {
+		t.Errorf("Text = %q, want %q", chat.Text, "Hello mesh!")
+	}
+	if !chat.ViaMqtt {
+		t.Error("expected ViaMqtt=true")
+	}
+	if chat.RxRssi != -85 {
+		t.Errorf("RxRssi = %d, want -85", chat.RxRssi)
+	}
+	if chat.RxSnr != 7.5 {
+		t.Errorf("RxSnr = %f, want 7.5", chat.RxSnr)
+	}
+}
+
+func TestExtractChatMessage_DMMessage(t *testing.T) {
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From:    0x11223344,
+				To:      0xAABBCCDD,
+				Channel: 2,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum: pb.PortNum_TEXT_MESSAGE_APP,
+						Payload: []byte("Private DM"),
+					},
+				},
+			},
+		},
+	})
+
+	chat := ExtractChatMessage(payload)
+	if chat == nil {
+		t.Fatal("expected non-nil ChatMessageData")
+	}
+	if chat.To != 0xAABBCCDD {
+		t.Errorf("To = %d, want %d", chat.To, uint32(0xAABBCCDD))
+	}
+	if chat.Channel != 2 {
+		t.Errorf("Channel = %d, want 2", chat.Channel)
+	}
+	if chat.Text != "Private DM" {
+		t.Errorf("Text = %q, want %q", chat.Text, "Private DM")
+	}
+}
+
+func TestExtractChatMessage_NotTextMessage(t *testing.T) {
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From: 0x11223344,
+				To:   0xFFFFFFFF,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum: pb.PortNum_POSITION_APP,
+						Payload: []byte{0x01, 0x02, 0x03},
+					},
+				},
+			},
+		},
+	})
+
+	chat := ExtractChatMessage(payload)
+	if chat != nil {
+		t.Error("expected nil for non-TEXT_MESSAGE_APP packet")
+	}
+}
+
+func TestExtractChatMessage_EncryptedPacket(t *testing.T) {
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From: 0x11223344,
+				To:   0xFFFFFFFF,
+				PayloadVariant: &pb.MeshPacket_Encrypted{
+					Encrypted: []byte{0xDE, 0xAD},
+				},
+			},
+		},
+	})
+
+	chat := ExtractChatMessage(payload)
+	if chat != nil {
+		t.Error("expected nil for encrypted packet")
+	}
+}
+
+func TestExtractChatMessage_NonPacketFrame(t *testing.T) {
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_ConfigCompleteId{
+			ConfigCompleteId: 42,
+		},
+	})
+
+	chat := ExtractChatMessage(payload)
+	if chat != nil {
+		t.Error("expected nil for non-packet frame")
+	}
+}
+
+func TestExtractChatMessage_GarbagePayload(t *testing.T) {
+	chat := ExtractChatMessage([]byte{0xFF, 0xFE, 0xFD})
+	if chat != nil {
+		t.Error("expected nil for garbage payload")
+	}
+}
+
+func TestExtractChatMessage_EmptyText(t *testing.T) {
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From: 0x11223344,
+				To:   0xFFFFFFFF,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum: pb.PortNum_TEXT_MESSAGE_APP,
+						Payload: []byte(""),
+					},
+				},
+			},
+		},
+	})
+
+	chat := ExtractChatMessage(payload)
+	if chat == nil {
+		t.Fatal("expected non-nil ChatMessageData even for empty text")
+	}
+	if chat.Text != "" {
+		t.Errorf("Text = %q, want empty", chat.Text)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ExtractChatMessageFromToRadio (ToRadio) tests
+// ---------------------------------------------------------------------------
+
+func TestExtractChatMessageFromToRadio_Valid(t *testing.T) {
+	payload := marshalToRadio(t, &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From:    0,
+				To:      0xFFFFFFFF,
+				Channel: 0,
+				ViaMqtt: false,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum: pb.PortNum_TEXT_MESSAGE_APP,
+						Payload: []byte("Outgoing message"),
+					},
+				},
+			},
+		},
+	})
+
+	chat := ExtractChatMessageFromToRadio(payload)
+	if chat == nil {
+		t.Fatal("expected non-nil ChatMessageData")
+	}
+	if chat.From != 0 {
+		t.Errorf("From = %d, want 0 (node fills in)", chat.From)
+	}
+	if chat.To != 0xFFFFFFFF {
+		t.Errorf("To = %d, want %d", chat.To, uint32(0xFFFFFFFF))
+	}
+	if chat.Text != "Outgoing message" {
+		t.Errorf("Text = %q, want %q", chat.Text, "Outgoing message")
+	}
+	if chat.ViaMqtt {
+		t.Error("expected ViaMqtt=false")
+	}
+	// ToRadio doesn't have RxRssi/RxSnr
+	if chat.RxRssi != 0 {
+		t.Errorf("RxRssi = %d, want 0", chat.RxRssi)
+	}
+	if chat.RxSnr != 0 {
+		t.Errorf("RxSnr = %f, want 0", chat.RxSnr)
+	}
+}
+
+func TestExtractChatMessageFromToRadio_DMWithChannel(t *testing.T) {
+	payload := marshalToRadio(t, &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Packet{
+			Packet: &pb.MeshPacket{
+				To:      0x12345678,
+				Channel: 3,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum: pb.PortNum_TEXT_MESSAGE_APP,
+						Payload: []byte("DM out"),
+					},
+				},
+			},
+		},
+	})
+
+	chat := ExtractChatMessageFromToRadio(payload)
+	if chat == nil {
+		t.Fatal("expected non-nil ChatMessageData")
+	}
+	if chat.To != 0x12345678 {
+		t.Errorf("To = %d, want %d", chat.To, uint32(0x12345678))
+	}
+	if chat.Channel != 3 {
+		t.Errorf("Channel = %d, want 3", chat.Channel)
+	}
+	if chat.Text != "DM out" {
+		t.Errorf("Text = %q, want %q", chat.Text, "DM out")
+	}
+}
+
+func TestExtractChatMessageFromToRadio_NotTextMessage(t *testing.T) {
+	payload := marshalToRadio(t, &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Packet{
+			Packet: &pb.MeshPacket{
+				To: 0xFFFFFFFF,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum: pb.PortNum_ADMIN_APP,
+						Payload: []byte{0x01, 0x02},
+					},
+				},
+			},
+		},
+	})
+
+	chat := ExtractChatMessageFromToRadio(payload)
+	if chat != nil {
+		t.Error("expected nil for non-TEXT_MESSAGE_APP ToRadio")
+	}
+}
+
+func TestExtractChatMessageFromToRadio_WantConfigId(t *testing.T) {
+	payload := marshalToRadio(t, &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_WantConfigId{
+			WantConfigId: 12345,
+		},
+	})
+
+	chat := ExtractChatMessageFromToRadio(payload)
+	if chat != nil {
+		t.Error("expected nil for want_config_id frame")
+	}
+}
+
+func TestExtractChatMessageFromToRadio_GarbagePayload(t *testing.T) {
+	chat := ExtractChatMessageFromToRadio([]byte{0xFF, 0xFE, 0xFD})
+	if chat != nil {
+		t.Error("expected nil for garbage payload")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// extractMyNodeNum tests
+// ---------------------------------------------------------------------------
+
+func TestExtractMyNodeNum_ValidMyInfo(t *testing.T) {
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_MyInfo{
+			MyInfo: &pb.MyNodeInfo{
+				MyNodeNum: 0xDEADBEEF,
+			},
+		},
+	})
+
+	num := extractMyNodeNum(payload)
+	if num != 0xDEADBEEF {
+		t.Errorf("myNodeNum = %d, want %d", num, uint32(0xDEADBEEF))
+	}
+}
+
+func TestExtractMyNodeNum_NotMyInfo(t *testing.T) {
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_ConfigCompleteId{
+			ConfigCompleteId: 42,
+		},
+	})
+
+	num := extractMyNodeNum(payload)
+	if num != 0 {
+		t.Errorf("myNodeNum = %d, want 0 for non-my_info frame", num)
+	}
+}
+
+func TestExtractMyNodeNum_GarbagePayload(t *testing.T) {
+	num := extractMyNodeNum([]byte{0xFF, 0xFE})
+	if num != 0 {
+		t.Errorf("myNodeNum = %d, want 0 for garbage payload", num)
+	}
+}

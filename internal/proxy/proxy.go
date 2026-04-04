@@ -120,6 +120,12 @@ func (p *Proxy) Clients() int {
 	return len(p.clients)
 }
 
+// SendToNode sends a raw ToRadio payload to the connected Meshtastic node.
+// Used by the web chat to send outgoing messages.
+func (p *Proxy) SendToNode(payload []byte) {
+	p.nodeConn.Send(payload)
+}
+
 // ClientAddrs returns the remote addresses of all connected clients.
 func (p *Proxy) ClientAddrs() []string {
 	p.mu.RLock()

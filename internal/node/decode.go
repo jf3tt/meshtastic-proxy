@@ -576,6 +576,87 @@ func copyBytes(b []byte) []byte {
 	return cp
 }
 
+// extractMyNodeNum extracts the node number from a FromRadio my_info payload.
+// Returns 0 if the payload is not a my_info frame or cannot be decoded.
+func extractMyNodeNum(payload []byte) uint32 {
+	msg := &pb.FromRadio{}
+	if err := proto.Unmarshal(payload, msg); err != nil {
+		return 0
+	}
+	if v, ok := msg.GetPayloadVariant().(*pb.FromRadio_MyInfo); ok {
+		return v.MyInfo.GetMyNodeNum()
+	}
+	return 0
+}
+
+// ChatMessageData holds raw chat message fields extracted from a MeshPacket.
+// The caller is responsible for enriching it with node names from the directory.
+type ChatMessageData struct {
+	From    uint32
+	To      uint32
+	Channel uint32
+	Text    string
+	ViaMqtt bool
+	RxRssi  int32
+	RxSnr   float32
+}
+
+// ExtractChatMessage tries to extract a text message from a FromRadio payload.
+// Returns nil if the payload is not a TEXT_MESSAGE_APP packet.
+func ExtractChatMessage(payload []byte) *ChatMessageData {
+	msg := &pb.FromRadio{}
+	if err := proto.Unmarshal(payload, msg); err != nil {
+		return nil
+	}
+	pkt, ok := msg.GetPayloadVariant().(*pb.FromRadio_Packet)
+	if !ok || pkt.Packet == nil {
+		return nil
+	}
+	decoded, ok := pkt.Packet.GetPayloadVariant().(*pb.MeshPacket_Decoded)
+	if !ok || decoded.Decoded == nil {
+		return nil
+	}
+	if decoded.Decoded.GetPortnum() != pb.PortNum_TEXT_MESSAGE_APP {
+		return nil
+	}
+	return &ChatMessageData{
+		From:    pkt.Packet.GetFrom(),
+		To:      pkt.Packet.GetTo(),
+		Channel: pkt.Packet.GetChannel(),
+		Text:    string(decoded.Decoded.GetPayload()),
+		ViaMqtt: pkt.Packet.GetViaMqtt(),
+		RxRssi:  pkt.Packet.GetRxRssi(),
+		RxSnr:   pkt.Packet.GetRxSnr(),
+	}
+}
+
+// ExtractChatMessageFromToRadio tries to extract a text message from a ToRadio payload.
+// Returns nil if the payload is not a ToRadio_Packet with TEXT_MESSAGE_APP.
+func ExtractChatMessageFromToRadio(payload []byte) *ChatMessageData {
+	msg := &pb.ToRadio{}
+	if err := proto.Unmarshal(payload, msg); err != nil {
+		return nil
+	}
+	pkt, ok := msg.GetPayloadVariant().(*pb.ToRadio_Packet)
+	if !ok || pkt.Packet == nil {
+		return nil
+	}
+	decoded, ok := pkt.Packet.GetPayloadVariant().(*pb.MeshPacket_Decoded)
+	if !ok || decoded.Decoded == nil {
+		return nil
+	}
+	if decoded.Decoded.GetPortnum() != pb.PortNum_TEXT_MESSAGE_APP {
+		return nil
+	}
+	return &ChatMessageData{
+		From:    pkt.Packet.GetFrom(),
+		To:      pkt.Packet.GetTo(),
+		Channel: pkt.Packet.GetChannel(),
+		Text:    string(decoded.Decoded.GetPayload()),
+		ViaMqtt: pkt.Packet.GetViaMqtt(),
+	}
+}
+
 // ExtractNodeDirectory parses NodeInfo frames from the config cache and
 // returns a map of node number → NodeEntry with all available fields.
 func ExtractNodeDirectory(frames [][]byte) map[uint32]metrics.NodeEntry {

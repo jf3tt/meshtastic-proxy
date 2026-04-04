@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -11,8 +12,10 @@ import (
 	"testing"
 	"time"
 
+	pb "buf.build/gen/go/meshtastic/protobufs/protocolbuffers/go/meshtastic"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/jfett/meshtastic-proxy/internal/metrics"
 )
@@ -694,5 +697,490 @@ func TestPrometheusMetrics_DisabledWhenNilHandler(t *testing.T) {
 
 	if resp.StatusCode != 404 {
 		t.Errorf("status = %d, want 404 when promHandler is nil", resp.StatusCode)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// /api/chat/messages tests
+// ---------------------------------------------------------------------------
+
+func TestAPIChatMessages_Empty(t *testing.T) {
+	s := newTestServer(t, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/chat/messages", nil)
+	rec := httptest.NewRecorder()
+
+	s.handleAPIChatMessages(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	ct := rec.Header().Get("Content-Type")
+	if ct != "application/json" {
+		t.Errorf("Content-Type = %q, want %q", ct, "application/json")
+	}
+
+	var msgs []metrics.ChatMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &msgs); err != nil {
+		t.Fatalf("failed to decode JSON: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Errorf("expected empty messages, got %d", len(msgs))
+	}
+}
+
+func TestAPIChatMessages_WithMessages(t *testing.T) {
+	m := metrics.New(10, 300)
+	m.RecordChatMessage(metrics.ChatMessage{
+		From:      0x12345678,
+		To:        0xFFFFFFFF,
+		Channel:   0,
+		Text:      "Hello mesh!",
+		FromName:  "Alice",
+		Direction: "incoming",
+	})
+	m.RecordChatMessage(metrics.ChatMessage{
+		From:      0x87654321,
+		To:        0x12345678,
+		Channel:   1,
+		Text:      "DM test",
+		FromName:  "Bob",
+		ToName:    "Alice",
+		Direction: "incoming",
+	})
+
+	s := newTestServerWithMetrics(t, m, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/chat/messages", nil)
+	rec := httptest.NewRecorder()
+
+	s.handleAPIChatMessages(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var msgs []metrics.ChatMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &msgs); err != nil {
+		t.Fatalf("failed to decode JSON: %v", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgs))
+	}
+	if msgs[0].Text != "Hello mesh!" {
+		t.Errorf("msgs[0].Text = %q, want %q", msgs[0].Text, "Hello mesh!")
+	}
+	if msgs[1].Text != "DM test" {
+		t.Errorf("msgs[1].Text = %q, want %q", msgs[1].Text, "DM test")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// /api/chat/send tests
+// ---------------------------------------------------------------------------
+
+func TestAPIChatSend_MethodNotAllowed(t *testing.T) {
+	s := newTestServer(t, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/chat/send", nil)
+	rec := httptest.NewRecorder()
+
+	s.handleAPIChatSend(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestAPIChatSend_NoChatSupport(t *testing.T) {
+	s := newTestServer(t, nil) // no WithChatSupport → sendToNodeFn is nil
+
+	body := `{"text":"hello","to":0,"channel":0}`
+	req := httptest.NewRequest(http.MethodPost, "/api/chat/send", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	s.handleAPIChatSend(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestAPIChatSend_EmptyText(t *testing.T) {
+	var sentPayload []byte
+	s := NewServer(":0", metrics.New(10, 300), slog.Default(),
+		func() []string { return nil }, nil,
+		WithChatSupport(
+			func(p []byte) { sentPayload = p },
+			func() [][]byte { return nil },
+			func() uint32 { return 1 },
+		),
+	)
+
+	body := `{"text":"","to":0,"channel":0}`
+	req := httptest.NewRequest(http.MethodPost, "/api/chat/send", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	s.handleAPIChatSend(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	if sentPayload != nil {
+		t.Error("expected no payload to be sent")
+	}
+}
+
+func TestAPIChatSend_TextTooLong(t *testing.T) {
+	s := NewServer(":0", metrics.New(10, 300), slog.Default(),
+		func() []string { return nil }, nil,
+		WithChatSupport(
+			func(p []byte) {},
+			func() [][]byte { return nil },
+			func() uint32 { return 1 },
+		),
+	)
+
+	longText := strings.Repeat("x", 238)
+	body := fmt.Sprintf(`{"text":%q}`, longText)
+	req := httptest.NewRequest(http.MethodPost, "/api/chat/send", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	s.handleAPIChatSend(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestAPIChatSend_InvalidJSON(t *testing.T) {
+	s := NewServer(":0", metrics.New(10, 300), slog.Default(),
+		func() []string { return nil }, nil,
+		WithChatSupport(
+			func(p []byte) {},
+			func() [][]byte { return nil },
+			func() uint32 { return 1 },
+		),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/chat/send", strings.NewReader("not json"))
+	rec := httptest.NewRecorder()
+
+	s.handleAPIChatSend(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestAPIChatSend_Success(t *testing.T) {
+	var sentPayload []byte
+	s := NewServer(":0", metrics.New(10, 300), slog.Default(),
+		func() []string { return nil }, nil,
+		WithChatSupport(
+			func(p []byte) { sentPayload = p },
+			func() [][]byte { return nil },
+			func() uint32 { return 0x11223344 },
+		),
+	)
+
+	body := `{"text":"hello mesh","to":4294967295,"channel":0}`
+	req := httptest.NewRequest(http.MethodPost, "/api/chat/send", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	s.handleAPIChatSend(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	ct := rec.Header().Get("Content-Type")
+	if ct != "application/json" {
+		t.Errorf("Content-Type = %q, want %q", ct, "application/json")
+	}
+
+	if sentPayload == nil {
+		t.Fatal("sendToNodeFn was not called")
+	}
+
+	// Verify the sent payload is a valid ToRadio with TEXT_MESSAGE_APP
+	toRadio := &pb.ToRadio{}
+	if err := proto.Unmarshal(sentPayload, toRadio); err != nil {
+		t.Fatalf("failed to unmarshal sent payload: %v", err)
+	}
+
+	pkt, ok := toRadio.GetPayloadVariant().(*pb.ToRadio_Packet)
+	if !ok || pkt.Packet == nil {
+		t.Fatal("expected ToRadio_Packet")
+	}
+
+	if pkt.Packet.GetTo() != 0xFFFFFFFF {
+		t.Errorf("To = %d, want %d", pkt.Packet.GetTo(), uint32(0xFFFFFFFF))
+	}
+	if pkt.Packet.GetChannel() != 0 {
+		t.Errorf("Channel = %d, want 0", pkt.Packet.GetChannel())
+	}
+	if !pkt.Packet.GetWantAck() {
+		t.Error("expected WantAck=true")
+	}
+
+	decoded, ok := pkt.Packet.GetPayloadVariant().(*pb.MeshPacket_Decoded)
+	if !ok || decoded.Decoded == nil {
+		t.Fatal("expected MeshPacket_Decoded")
+	}
+
+	if decoded.Decoded.GetPortnum() != pb.PortNum_TEXT_MESSAGE_APP {
+		t.Errorf("PortNum = %s, want TEXT_MESSAGE_APP", decoded.Decoded.GetPortnum())
+	}
+	if string(decoded.Decoded.GetPayload()) != "hello mesh" {
+		t.Errorf("Payload = %q, want %q", decoded.Decoded.GetPayload(), "hello mesh")
+	}
+}
+
+func TestAPIChatSend_DefaultToBroadcast(t *testing.T) {
+	var sentPayload []byte
+	s := NewServer(":0", metrics.New(10, 300), slog.Default(),
+		func() []string { return nil }, nil,
+		WithChatSupport(
+			func(p []byte) { sentPayload = p },
+			func() [][]byte { return nil },
+			func() uint32 { return 1 },
+		),
+	)
+
+	// to=0 should default to broadcast (0xFFFFFFFF)
+	body := `{"text":"broadcast test","to":0,"channel":0}`
+	req := httptest.NewRequest(http.MethodPost, "/api/chat/send", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	s.handleAPIChatSend(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	toRadio := &pb.ToRadio{}
+	if err := proto.Unmarshal(sentPayload, toRadio); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	pkt := toRadio.GetPayloadVariant().(*pb.ToRadio_Packet)
+	if pkt.Packet.GetTo() != 0xFFFFFFFF {
+		t.Errorf("To = %d, want %d (broadcast)", pkt.Packet.GetTo(), uint32(0xFFFFFFFF))
+	}
+}
+
+func TestAPIChatSend_DMToSpecificNode(t *testing.T) {
+	var sentPayload []byte
+	s := NewServer(":0", metrics.New(10, 300), slog.Default(),
+		func() []string { return nil }, nil,
+		WithChatSupport(
+			func(p []byte) { sentPayload = p },
+			func() [][]byte { return nil },
+			func() uint32 { return 1 },
+		),
+	)
+
+	body := `{"text":"DM test","to":305419896,"channel":2}`
+	req := httptest.NewRequest(http.MethodPost, "/api/chat/send", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	s.handleAPIChatSend(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	toRadio := &pb.ToRadio{}
+	if err := proto.Unmarshal(sentPayload, toRadio); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	pkt := toRadio.GetPayloadVariant().(*pb.ToRadio_Packet)
+	if pkt.Packet.GetTo() != 305419896 {
+		t.Errorf("To = %d, want 305419896", pkt.Packet.GetTo())
+	}
+	if pkt.Packet.GetChannel() != 2 {
+		t.Errorf("Channel = %d, want 2", pkt.Packet.GetChannel())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// /api/chat/channels tests
+// ---------------------------------------------------------------------------
+
+func TestAPIChatChannels_NoChatSupport(t *testing.T) {
+	s := newTestServer(t, nil) // no configCacheFn
+
+	req := httptest.NewRequest(http.MethodGet, "/api/chat/channels", nil)
+	rec := httptest.NewRecorder()
+
+	s.handleAPIChatChannels(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var channels []channelInfo
+	if err := json.Unmarshal(rec.Body.Bytes(), &channels); err != nil {
+		t.Fatalf("failed to decode JSON: %v", err)
+	}
+	if len(channels) != 0 {
+		t.Errorf("expected empty channels, got %d", len(channels))
+	}
+}
+
+func TestAPIChatChannels_WithChannels(t *testing.T) {
+	// Build config cache frames with channel entries
+	var frames [][]byte
+
+	// Channel 0: Primary (no name set), role=PRIMARY
+	ch0 := &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Channel{
+			Channel: &pb.Channel{
+				Index: 0,
+				Role:  pb.Channel_PRIMARY,
+				Settings: &pb.ChannelSettings{
+					Name: "",
+				},
+			},
+		},
+	}
+	ch0Data, _ := proto.Marshal(ch0)
+	frames = append(frames, ch0Data)
+
+	// Channel 1: Named secondary
+	ch1 := &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Channel{
+			Channel: &pb.Channel{
+				Index: 1,
+				Role:  pb.Channel_SECONDARY,
+				Settings: &pb.ChannelSettings{
+					Name: "Admin",
+				},
+			},
+		},
+	}
+	ch1Data, _ := proto.Marshal(ch1)
+	frames = append(frames, ch1Data)
+
+	// Channel 2: Disabled — should be filtered out
+	ch2 := &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Channel{
+			Channel: &pb.Channel{
+				Index: 2,
+				Role:  pb.Channel_DISABLED,
+			},
+		},
+	}
+	ch2Data, _ := proto.Marshal(ch2)
+	frames = append(frames, ch2Data)
+
+	// Non-channel frame — should be skipped
+	nonChannel := &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_ConfigCompleteId{
+			ConfigCompleteId: 12345,
+		},
+	}
+	ncData, _ := proto.Marshal(nonChannel)
+	frames = append(frames, ncData)
+
+	s := NewServer(":0", metrics.New(10, 300), slog.Default(),
+		func() []string { return nil }, nil,
+		WithChatSupport(
+			func(p []byte) {},
+			func() [][]byte { return frames },
+			func() uint32 { return 1 },
+		),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/chat/channels", nil)
+	rec := httptest.NewRecorder()
+
+	s.handleAPIChatChannels(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	ct := rec.Header().Get("Content-Type")
+	if ct != "application/json" {
+		t.Errorf("Content-Type = %q, want %q", ct, "application/json")
+	}
+
+	var channels []channelInfo
+	if err := json.Unmarshal(rec.Body.Bytes(), &channels); err != nil {
+		t.Fatalf("failed to decode JSON: %v", err)
+	}
+
+	if len(channels) != 2 {
+		t.Fatalf("expected 2 channels, got %d", len(channels))
+	}
+
+	// Channel 0: should have name "Primary" (default for unnamed primary)
+	if channels[0].Index != 0 {
+		t.Errorf("channels[0].Index = %d, want 0", channels[0].Index)
+	}
+	if channels[0].Name != "Primary" {
+		t.Errorf("channels[0].Name = %q, want %q", channels[0].Name, "Primary")
+	}
+	if channels[0].Role != "PRIMARY" {
+		t.Errorf("channels[0].Role = %q, want %q", channels[0].Role, "PRIMARY")
+	}
+
+	// Channel 1: Admin
+	if channels[1].Index != 1 {
+		t.Errorf("channels[1].Index = %d, want 1", channels[1].Index)
+	}
+	if channels[1].Name != "Admin" {
+		t.Errorf("channels[1].Name = %q, want %q", channels[1].Name, "Admin")
+	}
+	if channels[1].Role != "SECONDARY" {
+		t.Errorf("channels[1].Role = %q, want %q", channels[1].Role, "SECONDARY")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SSE chat_history initial event test
+// ---------------------------------------------------------------------------
+
+func TestSSE_InitialChatHistory(t *testing.T) {
+	m := metrics.New(10, 300)
+	m.RecordChatMessage(metrics.ChatMessage{
+		From:      0xAABBCCDD,
+		Text:      "SSE chat test",
+		Direction: "incoming",
+	})
+	s := newTestServerWithMetrics(t, m, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/events", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		s.handleSSE(rec, req)
+		close(done)
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handleSSE did not return after context cancel")
+	}
+
+	body := rec.Body.String()
+
+	if !strings.Contains(body, "event: chat_history") {
+		t.Error("SSE response missing initial chat_history event")
+	}
+	if !strings.Contains(body, "SSE chat test") {
+		t.Error("SSE chat_history event missing expected message text")
 	}
 }

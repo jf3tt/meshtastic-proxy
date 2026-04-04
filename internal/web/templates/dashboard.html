@@ -135,6 +135,10 @@
                     class="tab-btn text-xs font-semibold px-3 py-1 rounded-md transition-colors text-gray-400 hover:text-gray-200">
                     Map
                 </button>
+                <button id="tab-btn-chat" onclick="switchTab('chat')"
+                    class="tab-btn text-xs font-semibold px-3 py-1 rounded-md transition-colors text-gray-400 hover:text-gray-200">
+                    Chat
+                </button>
             </nav>
 
             <div class="ml-auto flex items-center gap-3">
@@ -414,6 +418,65 @@
             </div>
         </div><!-- end tab-map -->
 
+        <!-- ==================== CHAT TAB ==================== -->
+        <div id="tab-chat" class="hidden">
+            <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden flex flex-col" style="height: calc(100vh - 140px);">
+
+                <!-- Header bar -->
+                <div class="flex items-center gap-3 px-4 py-2.5 border-b border-gray-800 bg-gray-950/60 flex-shrink-0">
+                    <svg class="w-3.5 h-3.5 text-gray-500 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>
+                    </svg>
+                    <select id="chat-channel-filter" class="bg-gray-800 border border-gray-700 rounded-lg text-xs text-gray-200 px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-500/50 focus:border-indigo-500">
+                        <option value="all">All Channels</option>
+                    </select>
+                    <span id="chat-msg-count" class="ml-auto text-xs text-gray-500 font-mono tabular-nums">0 messages</span>
+                </div>
+
+                <!-- Message area -->
+                <div id="chat-messages" class="flex-1 min-h-0 overflow-y-auto px-3 py-2 space-y-px font-mono text-xs" style="scroll-behavior: smooth;">
+                    <div id="chat-empty" class="flex items-center justify-center h-full">
+                        <div class="flex flex-col items-center px-8 py-10 border border-dashed border-gray-800 rounded-2xl max-w-sm">
+                            <div class="w-14 h-14 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center mb-4">
+                                <svg class="w-7 h-7 text-indigo-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                                </svg>
+                            </div>
+                            <p class="text-sm font-semibold text-gray-300 mb-1">No messages yet</p>
+                            <p class="text-xs text-gray-500 text-center leading-relaxed">Messages from all channels and DMs will appear here in real time</p>
+                            <div class="flex items-center gap-4 mt-4 text-[10px] text-gray-600">
+                                <span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-blue-400/60"></span>Incoming</span>
+                                <span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-indigo-400/60"></span>Outgoing</span>
+                                <span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-amber-400/60"></span>DM</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Input area: [Channel] [Textarea + counter] [Send] -->
+                <div class="flex-shrink-0 border-t border-gray-800 bg-gray-950/60 px-4 py-3">
+                    <div class="flex items-end gap-2">
+                        <select id="chat-channel-send" class="bg-gray-800 border border-gray-700 rounded-lg text-xs text-gray-200 px-2 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-500/50 focus:border-indigo-500 flex-shrink-0 self-end">
+                            <option value="0">Ch 0</option>
+                        </select>
+                        <div class="relative flex-1 min-w-0">
+                            <textarea id="chat-input" maxlength="237" rows="1" placeholder="Type a message..."
+                                class="w-full bg-gray-800/60 border border-gray-700 rounded-lg text-sm text-gray-100 pl-3 pr-12 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-500/50 focus:border-indigo-500 placeholder-gray-500 resize-none overflow-hidden leading-snug"></textarea>
+                            <span id="chat-char-count" class="absolute right-3 bottom-2 text-[10px] text-gray-600 font-mono tabular-nums pointer-events-none select-none">237</span>
+                        </div>
+                        <button id="chat-send-btn"
+                            class="flex-shrink-0 w-9 h-9 self-end flex items-center justify-center bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                            disabled title="Send (Enter)">
+                            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+
+            </div>
+        </div><!-- end tab-chat -->
+
         <!-- Footer -->
         <footer class="mt-8 pt-4 border-t border-gray-800 text-center text-xs text-gray-600">
             Meshtastic TCP Proxy &mdash; real-time via SSE
@@ -426,6 +489,7 @@
             // Hide all tabs
             document.getElementById('tab-dashboard').classList.add('hidden');
             document.getElementById('tab-map').classList.add('hidden');
+            document.getElementById('tab-chat').classList.add('hidden');
 
             // Deactivate all tab buttons
             document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -444,6 +508,12 @@
             // Initialize map on first show
             if (tabName === 'map') {
                 initMap();
+            }
+
+            // Scroll to bottom of chat on show
+            if (tabName === 'chat') {
+                initChat();
+                scrollChatToBottom();
             }
         }
 
@@ -665,6 +735,17 @@
                 if (paused) return;
                 const sig = JSON.parse(e.data);
                 updateNodeSignal(sig);
+            });
+
+            evtSource.addEventListener('chat_history', function(e) {
+                const messages = JSON.parse(e.data);
+                loadChatHistory(messages);
+            });
+
+            evtSource.addEventListener('chat_message', function(e) {
+                if (paused) return;
+                const msg = JSON.parse(e.data);
+                appendChatMessage(msg);
             });
 
             evtSource.onerror = function() {
@@ -1544,6 +1625,295 @@
             applyMapFilters();
             updateHeatmap();
         });
+    })();
+    </script>
+
+    <!-- ==================== CHAT JAVASCRIPT ==================== -->
+    <script>
+    (function() {
+        'use strict';
+
+        const chatMessages = document.getElementById('chat-messages');
+        const chatEmpty = document.getElementById('chat-empty');
+        const chatInput = document.getElementById('chat-input');
+        const chatSendBtn = document.getElementById('chat-send-btn');
+        const chatChannelSend = document.getElementById('chat-channel-send');
+        const chatChannelFilter = document.getElementById('chat-channel-filter');
+        const chatMsgCount = document.getElementById('chat-msg-count');
+
+        let chatInitialized = false;
+        let allChatMessages = [];
+        let chatChannels = [];
+        let chatAutoScroll = true;
+
+        // ── Initialize chat (called on first tab show) ──
+        window.initChat = function() {
+            if (chatInitialized) return;
+            chatInitialized = true;
+            loadChannels();
+        };
+
+        // ── Load channels from API ──
+        function loadChannels() {
+            fetch('/api/chat/channels')
+                .then(function(r) { return r.json(); })
+                .then(function(channels) {
+                    chatChannels = channels;
+                    updateChannelSelectors(channels);
+                })
+                .catch(function(err) { console.error('Failed to load channels:', err); });
+        }
+
+        function updateChannelSelectors(channels) {
+            // Filter selector
+            chatChannelFilter.innerHTML = '<option value="all">All Channels</option>';
+            channels.forEach(function(ch) {
+                const opt = document.createElement('option');
+                opt.value = ch.index;
+                opt.textContent = ch.name || ('Ch ' + ch.index);
+                chatChannelFilter.appendChild(opt);
+            });
+
+            // Send selector
+            chatChannelSend.innerHTML = '';
+            channels.forEach(function(ch) {
+                const opt = document.createElement('option');
+                opt.value = ch.index;
+                opt.textContent = ch.name || ('Ch ' + ch.index);
+                chatChannelSend.appendChild(opt);
+            });
+            if (chatChannelSend.options.length === 0) {
+                const opt = document.createElement('option');
+                opt.value = '0';
+                opt.textContent = 'Ch 0';
+                chatChannelSend.appendChild(opt);
+            }
+        }
+
+        // ── Format timestamp ──
+        function formatTime(ts) {
+            const d = new Date(ts);
+            const h = String(d.getHours()).padStart(2, '0');
+            const m = String(d.getMinutes()).padStart(2, '0');
+            const s = String(d.getSeconds()).padStart(2, '0');
+            return h + ':' + m + ':' + s;
+        }
+
+        // ── Format node number to hex ──
+        function nodeHex(n) {
+            return '!' + ('00000000' + (n >>> 0).toString(16)).slice(-8);
+        }
+
+        // ── Get display name for node ──
+        function nodeName(n) {
+            if (n === 0xFFFFFFFF || n === 4294967295) return 'Broadcast';
+            if (nodeDir && nodeDir[n] && nodeDir[n].short_name) return nodeDir[n].short_name;
+            return nodeHex(n);
+        }
+
+        // ── Create message element ──
+        function createMessageEl(msg) {
+            const div = document.createElement('div');
+            div.dataset.channel = msg.channel;
+
+            const isOutgoing = msg.direction === 'outgoing';
+            const isBroadcast = msg.to === 0xFFFFFFFF || msg.to === 4294967295;
+            const isDM = !isBroadcast;
+
+            let fromDisplay = msg.from_name || nodeName(msg.from);
+            let toDisplay = msg.to_name || nodeName(msg.to);
+
+            // Left border color: outgoing=indigo, DM=amber, broadcast incoming=blue
+            let borderColor = 'border-l-blue-500/40';
+            let nameColor = 'text-blue-400';
+            if (isOutgoing) { borderColor = 'border-l-indigo-500/40'; nameColor = 'text-indigo-400'; }
+            else if (isDM) { borderColor = 'border-l-amber-500/40'; nameColor = 'text-amber-400'; }
+
+            div.className = 'chat-msg flex items-baseline gap-2 py-1 px-2 border-l-2 ' + borderColor + ' hover:bg-gray-800/30 rounded-r-sm transition-colors';
+
+            let channelLabel = '';
+            if (chatChannels.length > 0) {
+                const ch = chatChannels.find(function(c) { return c.index === msg.channel; });
+                channelLabel = ch ? ch.name || ('Ch' + msg.channel) : ('Ch' + msg.channel);
+            } else {
+                channelLabel = 'Ch' + msg.channel;
+            }
+
+            // Pill badges
+            let metaBadges = '';
+            if (msg.via_mqtt) metaBadges += '<span class="text-[9px] font-bold uppercase px-1.5 py-px rounded bg-purple-500/15 text-purple-400 border border-purple-500/30">MQTT</span>';
+            if (isDM) metaBadges += '<span class="text-[9px] font-bold uppercase px-1.5 py-px rounded bg-amber-500/15 text-amber-400 border border-amber-500/30">DM</span>';
+
+            // Signal info
+            let signalInfo = '';
+            if (msg.rx_rssi && msg.rx_rssi !== 0) {
+                signalInfo = '<span class="text-[10px] text-gray-600 tabular-nums">' + msg.rx_rssi + 'dBm';
+                if (msg.rx_snr && msg.rx_snr !== 0) signalInfo += ' ' + msg.rx_snr.toFixed(1) + 'dB';
+                signalInfo += '</span>';
+            }
+
+            // Direction arrow: colored
+            const arrowSvg = isOutgoing
+                ? '<svg class="w-3 h-3 text-indigo-500 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>'
+                : '<svg class="w-3 h-3 text-emerald-500 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>';
+
+            div.innerHTML =
+                '<span class="text-gray-600 text-[10px] w-[3.2rem] flex-shrink-0 text-right tabular-nums">' + formatTime(msg.timestamp) + '</span>' +
+                '<span class="text-gray-600 text-[10px] flex-shrink-0">' + escapeHtml(channelLabel) + '</span>' +
+                arrowSvg +
+                '<span class="' + nameColor + ' font-semibold flex-shrink-0" title="' + nodeHex(msg.from) + '">' + escapeHtml(fromDisplay) + '</span>' +
+                (isDM ? '<span class="text-gray-600 flex-shrink-0 text-[10px]">\u2192</span><span class="text-amber-300 flex-shrink-0" title="' + nodeHex(msg.to) + '">' + escapeHtml(toDisplay) + '</span>' : '') +
+                '<span class="text-gray-300 break-all">' + escapeHtml(msg.text) + '</span>' +
+                (metaBadges || signalInfo ? '<span class="flex items-center gap-1 flex-shrink-0 ml-auto">' + metaBadges + signalInfo + '</span>' : '');
+
+            return div;
+        }
+
+        function escapeHtml(s) {
+            const div = document.createElement('div');
+            div.appendChild(document.createTextNode(s));
+            return div.innerHTML;
+        }
+
+        // ── Auto-scroll detection ──
+        chatMessages.addEventListener('scroll', function() {
+            const threshold = 40;
+            chatAutoScroll = (chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight) < threshold;
+        });
+
+        window.scrollChatToBottom = function() {
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        };
+
+        // ── Filter messages by channel ──
+        function applyChatFilter() {
+            const filterVal = chatChannelFilter.value;
+            const msgEls = chatMessages.querySelectorAll('.chat-msg');
+            let visible = 0;
+            msgEls.forEach(function(el) {
+                if (filterVal === 'all' || el.dataset.channel === filterVal) {
+                    el.style.display = '';
+                    visible++;
+                } else {
+                    el.style.display = 'none';
+                }
+            });
+            chatMsgCount.textContent = visible + ' messages';
+            chatEmpty.style.display = visible === 0 ? '' : 'none';
+        }
+
+        chatChannelFilter.addEventListener('change', applyChatFilter);
+
+        // ── Load chat history (from SSE initial event) ──
+        window.loadChatHistory = function(messages) {
+            if (!messages || messages.length === 0) return;
+            allChatMessages = messages;
+            // Clear existing
+            chatMessages.querySelectorAll('.chat-msg').forEach(function(el) { el.remove(); });
+            messages.forEach(function(msg) {
+                chatMessages.appendChild(createMessageEl(msg));
+            });
+            chatEmpty.style.display = messages.length > 0 ? 'none' : '';
+            chatMsgCount.textContent = messages.length + ' messages';
+            applyChatFilter();
+            scrollChatToBottom();
+        };
+
+        // ── Append single chat message (from SSE stream) ──
+        window.appendChatMessage = function(msg) {
+            allChatMessages.push(msg);
+            // Trim to 500
+            if (allChatMessages.length > 500) {
+                allChatMessages.shift();
+                const first = chatMessages.querySelector('.chat-msg');
+                if (first) first.remove();
+            }
+
+            const el = createMessageEl(msg);
+            chatMessages.appendChild(el);
+            chatEmpty.style.display = 'none';
+
+            // Apply current filter
+            const filterVal = chatChannelFilter.value;
+            if (filterVal !== 'all' && String(msg.channel) !== filterVal) {
+                el.style.display = 'none';
+            }
+
+            // Update count
+            const visibleCount = chatMessages.querySelectorAll('.chat-msg:not([style*="display: none"])').length;
+            chatMsgCount.textContent = visibleCount + ' messages';
+
+            if (chatAutoScroll) scrollChatToBottom();
+        };
+
+        // ── Send message ──
+        function sendMessage() {
+            const text = chatInput.value.trim();
+            if (!text) return;
+
+            const channel = parseInt(chatChannelSend.value, 10) || 0;
+            const to = 0xFFFFFFFF; // always broadcast
+
+            chatSendBtn.disabled = true;
+            chatInput.disabled = true;
+
+            fetch('/api/chat/send', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: text, to: to, channel: channel })
+            })
+            .then(function(r) {
+                if (!r.ok) return r.text().then(function(t) { throw new Error(t); });
+                chatInput.value = '';
+                updateSendButton();
+                autoResizeTextarea();
+            })
+            .catch(function(err) {
+                console.error('Send failed:', err);
+            })
+            .finally(function() {
+                chatSendBtn.disabled = false;
+                chatInput.disabled = false;
+                chatInput.focus();
+                updateSendButton();
+                autoResizeTextarea();
+            });
+        }
+
+        // ── Enable/disable send button based on input + character counter ──
+        const chatCharCount = document.getElementById('chat-char-count');
+        function updateSendButton() {
+            const len = chatInput.value.length;
+            chatSendBtn.disabled = chatInput.value.trim().length === 0;
+            chatCharCount.textContent = (237 - len);
+            if (len >= 237) chatCharCount.className = 'absolute right-3 bottom-2 text-[10px] font-mono tabular-nums pointer-events-none select-none text-red-400';
+            else if (len > 200) chatCharCount.className = 'absolute right-3 bottom-2 text-[10px] font-mono tabular-nums pointer-events-none select-none text-amber-400';
+            else chatCharCount.className = 'absolute right-3 bottom-2 text-[10px] font-mono tabular-nums pointer-events-none select-none text-gray-600';
+        }
+
+        // ── Textarea auto-resize (max 4 lines) ──
+        function autoResizeTextarea() {
+            chatInput.style.height = 'auto';
+            var maxHeight = parseInt(getComputedStyle(chatInput).lineHeight, 10) * 4 + 16;
+            chatInput.style.height = Math.min(chatInput.scrollHeight, maxHeight) + 'px';
+            if (chatInput.scrollHeight > maxHeight) {
+                chatInput.style.overflowY = 'auto';
+            } else {
+                chatInput.style.overflowY = 'hidden';
+            }
+        }
+
+        chatInput.addEventListener('input', function() {
+            updateSendButton();
+            autoResizeTextarea();
+        });
+        chatInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                if (chatInput.value.trim()) sendMessage();
+            }
+        });
+        chatSendBtn.addEventListener('click', sendMessage);
     })();
     </script>
 </body>

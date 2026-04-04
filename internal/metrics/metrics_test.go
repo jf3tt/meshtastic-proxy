@@ -1132,3 +1132,102 @@ func TestUpdateNodeSignal_PreservesOtherFields(t *testing.T) {
 		t.Errorf("battery_level = %d, want 85 (preserved)", entry.BatteryLevel)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Chat message ring buffer tests
+// ---------------------------------------------------------------------------
+
+func TestRecordChatMessage(t *testing.T) {
+	m := New(10, 300)
+
+	m.RecordChatMessage(ChatMessage{
+		From:      0xAA,
+		To:        0xFFFFFFFF,
+		Channel:   0,
+		Text:      "hello mesh",
+		FromName:  "AA",
+		ToName:    "Broadcast",
+		Direction: "incoming",
+	})
+
+	msgs := m.ChatMessages()
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 chat message, got %d", len(msgs))
+	}
+	if msgs[0].Text != "hello mesh" {
+		t.Errorf("text = %q, want %q", msgs[0].Text, "hello mesh")
+	}
+	if msgs[0].Timestamp.IsZero() {
+		t.Error("expected non-zero timestamp")
+	}
+	if msgs[0].From != 0xAA {
+		t.Errorf("from = %d, want %d", msgs[0].From, 0xAA)
+	}
+	if msgs[0].To != 0xFFFFFFFF {
+		t.Errorf("to = %d, want %d", msgs[0].To, 0xFFFFFFFF)
+	}
+}
+
+func TestChatMessageRingBuffer(t *testing.T) {
+	m := New(10, 300)
+	// maxChatMessages is hardcoded to 500 in New(), so fill it up
+	for i := 0; i < 510; i++ {
+		m.RecordChatMessage(ChatMessage{
+			From: uint32(i),
+			Text: "msg",
+		})
+	}
+	msgs := m.ChatMessages()
+	if len(msgs) != 500 {
+		t.Fatalf("expected 500 chat messages (ring buffer), got %d", len(msgs))
+	}
+	// First message should be from index 10 (oldest 10 evicted)
+	if msgs[0].From != 10 {
+		t.Errorf("oldest message from = %d, want 10", msgs[0].From)
+	}
+}
+
+func TestChatMessages_ReturnsCopy(t *testing.T) {
+	m := New(10, 300)
+	m.RecordChatMessage(ChatMessage{Text: "test"})
+
+	msgs1 := m.ChatMessages()
+	msgs2 := m.ChatMessages()
+
+	msgs1[0].Text = "modified"
+	if msgs2[0].Text == "modified" {
+		t.Error("ChatMessages should return a copy, not a reference")
+	}
+}
+
+func TestChatMessages_Empty(t *testing.T) {
+	m := New(10, 300)
+	msgs := m.ChatMessages()
+	if len(msgs) != 0 {
+		t.Fatalf("expected 0 chat messages, got %d", len(msgs))
+	}
+}
+
+func TestRecordChatMessage_PublishesSSE(t *testing.T) {
+	m := New(10, 300)
+	ch := m.Subscribe()
+	defer m.Unsubscribe(ch)
+
+	m.RecordChatMessage(ChatMessage{Text: "sse test"})
+
+	select {
+	case evt := <-ch:
+		if evt.Type != "chat_message" {
+			t.Errorf("event type = %q, want %q", evt.Type, "chat_message")
+		}
+		msg, ok := evt.Data.(ChatMessage)
+		if !ok {
+			t.Fatal("event data is not ChatMessage")
+		}
+		if msg.Text != "sse test" {
+			t.Errorf("text = %q, want %q", msg.Text, "sse test")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("did not receive SSE event")
+	}
+}

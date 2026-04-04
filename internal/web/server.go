@@ -12,25 +12,46 @@ import (
 	"net/http"
 	"time"
 
+	pb "buf.build/gen/go/meshtastic/protobufs/protocolbuffers/go/meshtastic"
+	"google.golang.org/protobuf/proto"
+
 	"github.com/jfett/meshtastic-proxy/internal/metrics"
 )
+
+// ServerOption is a functional option for configuring the web server.
+type ServerOption func(*Server)
+
+// WithChatSupport configures the server with chat functionality.
+// sendToNodeFn sends a raw ToRadio payload to the node.
+// configCacheFn returns the cached config frames for channel extraction.
+// myNodeNumFn returns the connected node's number.
+func WithChatSupport(sendToNodeFn func([]byte), configCacheFn func() [][]byte, myNodeNumFn func() uint32) ServerOption {
+	return func(s *Server) {
+		s.sendToNodeFn = sendToNodeFn
+		s.configCacheFn = configCacheFn
+		s.myNodeNumFn = myNodeNumFn
+	}
+}
 
 //go:embed templates/*.html templates/static/*
 var templateFS embed.FS
 
 // Server provides an HTTP dashboard and API for monitoring the proxy.
 type Server struct {
-	listenAddr  string
-	metrics     *metrics.Metrics
-	logger      *slog.Logger
-	clientsFn   func() []string // returns connected client addresses
-	templates   *template.Template
-	promHandler http.Handler // Prometheus metrics handler (nil = disabled)
+	listenAddr    string
+	metrics       *metrics.Metrics
+	logger        *slog.Logger
+	clientsFn     func() []string // returns connected client addresses
+	sendToNodeFn  func(payload []byte)
+	configCacheFn func() [][]byte
+	myNodeNumFn   func() uint32
+	templates     *template.Template
+	promHandler   http.Handler // Prometheus metrics handler (nil = disabled)
 }
 
 // NewServer creates a new web server.
 // promHandler is optional; when non-nil it is registered at GET /metrics.
-func NewServer(listenAddr string, m *metrics.Metrics, logger *slog.Logger, clientsFn func() []string, promHandler http.Handler) *Server {
+func NewServer(listenAddr string, m *metrics.Metrics, logger *slog.Logger, clientsFn func() []string, promHandler http.Handler, opts ...ServerOption) *Server {
 	funcMap := template.FuncMap{
 		"json": func(v any) template.JS {
 			b, _ := json.Marshal(v)
@@ -84,7 +105,7 @@ func NewServer(listenAddr string, m *metrics.Metrics, logger *slog.Logger, clien
 
 	tmpl := template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/*.html"))
 
-	return &Server{
+	s := &Server{
 		listenAddr:  listenAddr,
 		metrics:     m,
 		logger:      logger,
@@ -92,6 +113,12 @@ func NewServer(listenAddr string, m *metrics.Metrics, logger *slog.Logger, clien
 		templates:   tmpl,
 		promHandler: promHandler,
 	}
+
+	for _, opt := range opts {
+		opt(s)
+	}
+
+	return s
 }
 
 // buildMux creates the HTTP multiplexer with all routes.
@@ -114,6 +141,11 @@ func (s *Server) buildMux() *http.ServeMux {
 	mux.HandleFunc("/api/metrics", s.handleAPIMetrics)
 	mux.HandleFunc("/api/clients", s.handleAPIClients)
 	mux.HandleFunc("/api/events", s.handleSSE)
+
+	// Chat API endpoints
+	mux.HandleFunc("/api/chat/messages", s.handleAPIChatMessages)
+	mux.HandleFunc("/api/chat/send", s.handleAPIChatSend)
+	mux.HandleFunc("/api/chat/channels", s.handleAPIChatChannels)
 
 	// Prometheus metrics endpoint
 	if s.promHandler != nil {
@@ -222,6 +254,137 @@ func (s *Server) handleAPIClients(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleAPIChatMessages returns the chat message history as JSON.
+func (s *Server) handleAPIChatMessages(w http.ResponseWriter, _ *http.Request) {
+	messages := s.metrics.ChatMessages()
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(messages); err != nil {
+		s.logger.Error("failed to encode chat messages response", "error", err)
+	}
+}
+
+// chatSendRequest is the JSON body for POST /api/chat/send.
+type chatSendRequest struct {
+	Text    string `json:"text"`
+	To      uint32 `json:"to"`
+	Channel uint32 `json:"channel"`
+}
+
+// handleAPIChatSend sends a text message via the connected Meshtastic node.
+func (s *Server) handleAPIChatSend(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.sendToNodeFn == nil {
+		http.Error(w, "chat not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req chatSendRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.Text == "" {
+		http.Error(w, "text is required", http.StatusBadRequest)
+		return
+	}
+	if len(req.Text) > 237 {
+		http.Error(w, "text too long (max 237 bytes)", http.StatusBadRequest)
+		return
+	}
+
+	// Default to broadcast
+	to := req.To
+	if to == 0 {
+		to = 0xFFFFFFFF
+	}
+
+	// Build ToRadio with MeshPacket containing TEXT_MESSAGE_APP
+	toRadio := &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Packet{
+			Packet: &pb.MeshPacket{
+				To:      to,
+				Channel: req.Channel,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum: pb.PortNum_TEXT_MESSAGE_APP,
+						Payload: []byte(req.Text),
+					},
+				},
+				WantAck: true,
+			},
+		},
+	}
+
+	data, err := proto.Marshal(toRadio)
+	if err != nil {
+		s.logger.Error("failed to marshal chat ToRadio", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	s.sendToNodeFn(data)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"ok":true}` + "\n"))
+}
+
+// channelInfo is a single channel entry returned by the channels API.
+type channelInfo struct {
+	Index uint32 `json:"index"`
+	Name  string `json:"name"`
+	Role  string `json:"role"`
+}
+
+// handleAPIChatChannels returns the list of configured channels from the config cache.
+func (s *Server) handleAPIChatChannels(w http.ResponseWriter, _ *http.Request) {
+	var channels []channelInfo
+
+	if s.configCacheFn != nil {
+		frames := s.configCacheFn()
+		for _, frame := range frames {
+			msg := &pb.FromRadio{}
+			if err := proto.Unmarshal(frame, msg); err != nil {
+				continue
+			}
+			ch, ok := msg.GetPayloadVariant().(*pb.FromRadio_Channel)
+			if !ok || ch.Channel == nil {
+				continue
+			}
+			role := ch.Channel.GetRole()
+			if role == pb.Channel_DISABLED {
+				continue
+			}
+			name := ""
+			if s := ch.Channel.GetSettings(); s != nil {
+				name = s.GetName()
+			}
+			if name == "" && ch.Channel.GetIndex() == 0 {
+				name = "Primary"
+			}
+			channels = append(channels, channelInfo{
+				Index: uint32(ch.Channel.GetIndex()),
+				Name:  name,
+				Role:  role.String(),
+			})
+		}
+	}
+
+	if channels == nil {
+		channels = []channelInfo{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(channels); err != nil {
+		s.logger.Error("failed to encode channels response", "error", err)
+	}
+}
+
 // handleSSE streams Server-Sent Events to the browser.
 func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
@@ -252,6 +415,10 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	// Send initial node directory
 	nodeDirJSON, _ := json.Marshal(s.metrics.NodeDirectory())
 	_, _ = fmt.Fprintf(w, "event: node_directory\ndata: %s\n\n", nodeDirJSON)
+
+	// Send initial chat history
+	chatJSON, _ := json.Marshal(s.metrics.ChatMessages())
+	_, _ = fmt.Fprintf(w, "event: chat_history\ndata: %s\n\n", chatJSON)
 	flusher.Flush()
 
 	for {

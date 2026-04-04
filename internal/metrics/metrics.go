@@ -96,6 +96,21 @@ type SignalUpdate struct {
 	RxSnr     float32 `json:"rx_snr"`
 }
 
+// ChatMessage stores a single text message from the mesh network.
+type ChatMessage struct {
+	Timestamp time.Time `json:"timestamp"`
+	From      uint32    `json:"from"`      // sender node number
+	To        uint32    `json:"to"`        // destination (0xFFFFFFFF = broadcast)
+	Channel   uint32    `json:"channel"`   // channel index
+	Text      string    `json:"text"`      // message text (UTF-8)
+	FromName  string    `json:"from_name"` // short name of sender (from node directory)
+	ToName    string    `json:"to_name"`   // short name of recipient (from node directory)
+	Direction string    `json:"direction"` // "incoming" or "outgoing"
+	ViaMqtt   bool      `json:"via_mqtt"`  // relayed through MQTT
+	RxRssi    int32     `json:"rx_rssi"`   // RSSI at receiver (dBm)
+	RxSnr     float32   `json:"rx_snr"`    // SNR at receiver (dB)
+}
+
 // MessageRecord stores information about a proxied message.
 type MessageRecord struct {
 	Timestamp time.Time `json:"timestamp"`
@@ -169,6 +184,11 @@ type Metrics struct {
 	messages    []MessageRecord
 	maxMessages int
 
+	// Chat message log (ring buffer, TEXT_MESSAGE_APP only)
+	chatMu          sync.RWMutex
+	chatMessages    []ChatMessage
+	maxChatMessages int
+
 	// Traffic time-series (ring buffer)
 	trafficMu      sync.RWMutex
 	trafficSamples []TrafficSample
@@ -201,13 +221,15 @@ func New(maxMessages, maxTrafficSamples int) *Metrics {
 		maxTrafficSamples = 300
 	}
 	return &Metrics{
-		startTime:      time.Now(),
-		messages:       make([]MessageRecord, 0, maxMessages),
-		maxMessages:    maxMessages,
-		trafficSamples: make([]TrafficSample, 0, maxTrafficSamples),
-		maxSamples:     maxTrafficSamples,
-		typeCounts:     make(map[string]int64),
-		subscribers:    make(map[chan Event]struct{}),
+		startTime:       time.Now(),
+		messages:        make([]MessageRecord, 0, maxMessages),
+		maxMessages:     maxMessages,
+		chatMessages:    make([]ChatMessage, 0, 500),
+		maxChatMessages: 500,
+		trafficSamples:  make([]TrafficSample, 0, maxTrafficSamples),
+		maxSamples:      maxTrafficSamples,
+		typeCounts:      make(map[string]int64),
+		subscribers:     make(map[chan Event]struct{}),
 	}
 }
 
@@ -481,6 +503,32 @@ func (m *Metrics) Messages() []MessageRecord {
 
 	result := make([]MessageRecord, len(m.messages))
 	copy(result, m.messages)
+	return result
+}
+
+// RecordChatMessage adds a chat message to the dedicated chat ring buffer
+// and publishes a "chat_message" SSE event.
+func (m *Metrics) RecordChatMessage(msg ChatMessage) {
+	msg.Timestamp = time.Now()
+
+	m.chatMu.Lock()
+	if len(m.chatMessages) >= m.maxChatMessages {
+		copy(m.chatMessages, m.chatMessages[1:])
+		m.chatMessages = m.chatMessages[:len(m.chatMessages)-1]
+	}
+	m.chatMessages = append(m.chatMessages, msg)
+	m.chatMu.Unlock()
+
+	m.publish(Event{Type: "chat_message", Data: msg})
+}
+
+// ChatMessages returns a copy of the recent chat message log.
+func (m *Metrics) ChatMessages() []ChatMessage {
+	m.chatMu.RLock()
+	defer m.chatMu.RUnlock()
+
+	result := make([]ChatMessage, len(m.chatMessages))
+	copy(result, m.chatMessages)
 	return result
 }
 

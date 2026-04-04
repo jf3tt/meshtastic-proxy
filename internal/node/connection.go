@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	pb "buf.build/gen/go/meshtastic/protobufs/protocolbuffers/go/meshtastic"
@@ -41,6 +42,9 @@ type Connection struct {
 	// configCache stores the last known configuration for new clients
 	configMu    sync.RWMutex
 	configCache [][]byte // serialized FromRadio frames (config sequence)
+
+	// myNodeNum is the node number of the connected node, extracted from my_info.
+	myNodeNum atomic.Uint32
 }
 
 // ConnectionOptions holds all configuration for creating a new Connection.
@@ -83,9 +87,48 @@ func (c *Connection) Send(payload []byte) {
 		c.metrics.FramesToNode.Add(1)
 		c.metrics.BytesToNode.Add(int64(len(payload)))
 		c.metrics.RecordMessage(decodeToRadio(payload))
+
+		// Record outgoing TEXT_MESSAGE_APP as a chat message
+		if chat := ExtractChatMessageFromToRadio(payload); chat != nil {
+			if chat.From == 0 {
+				chat.From = c.myNodeNum.Load()
+			}
+			c.recordChatMessage(chat, "outgoing")
+		}
 	default:
 		c.logger.Warn("toNode channel full, dropping frame")
 	}
+}
+
+// recordChatMessage resolves node names from the directory and records
+// a chat message in the metrics ring buffer.
+func (c *Connection) recordChatMessage(chat *ChatMessageData, direction string) {
+	dir := c.metrics.NodeDirectory()
+
+	fromName := ""
+	if entry, ok := dir[chat.From]; ok && entry.ShortName != "" {
+		fromName = entry.ShortName
+	}
+
+	toName := ""
+	if chat.To == 0xFFFFFFFF {
+		toName = "Broadcast"
+	} else if entry, ok := dir[chat.To]; ok && entry.ShortName != "" {
+		toName = entry.ShortName
+	}
+
+	c.metrics.RecordChatMessage(metrics.ChatMessage{
+		From:      chat.From,
+		To:        chat.To,
+		Channel:   chat.Channel,
+		Text:      chat.Text,
+		FromName:  fromName,
+		ToName:    toName,
+		Direction: direction,
+		ViaMqtt:   chat.ViaMqtt,
+		RxRssi:    chat.RxRssi,
+		RxSnr:     chat.RxSnr,
+	})
 }
 
 // ConfigCache returns the cached configuration frames for replaying to new clients.
@@ -100,6 +143,12 @@ func (c *Connection) ConfigCache() [][]byte {
 		result[i] = cp
 	}
 	return result
+}
+
+// MyNodeNum returns the node number of the connected Meshtastic node.
+// Returns 0 if the config has not yet been received.
+func (c *Connection) MyNodeNum() uint32 {
+	return c.myNodeNum.Load()
 }
 
 // Run starts the connection manager. It connects to the node, reads frames,
@@ -288,12 +337,22 @@ func (c *Connection) readLoop(ctx context.Context, conn net.Conn) error {
 			})
 		}
 
+		// Record incoming TEXT_MESSAGE_APP as a chat message
+		if chat := ExtractChatMessage(payload); chat != nil {
+			c.recordChatMessage(chat, "incoming")
+		}
+
 		// Config caching logic
 		switch rec.Type {
 		case "my_info":
 			collectingConfig = true
 			configFrames = [][]byte{}
 			configFrames = append(configFrames, copyBytes(payload))
+
+			// Extract and cache the node number for later use.
+			if myNum := extractMyNodeNum(payload); myNum != 0 {
+				c.myNodeNum.Store(myNum)
+			}
 		case "config_complete_id":
 			configFrames = append(configFrames, copyBytes(payload))
 			if collectingConfig {
