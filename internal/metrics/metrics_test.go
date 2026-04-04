@@ -580,3 +580,555 @@ func TestSnapshotIncludesNodeDir(t *testing.T) {
 		t.Errorf("short_name = %q, want %q", snap.NodeDir[0xAA].ShortName, "X")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// UpdateNodePosition tests
+// ---------------------------------------------------------------------------
+
+func TestUpdateNodePosition_ExistingNode(t *testing.T) {
+	m := New(10, 300)
+
+	m.SetNodeDirectory(map[uint32]NodeEntry{
+		0x12345678: {ShortName: "BN", LongName: "Base Node"},
+	})
+
+	ch := m.Subscribe()
+	defer m.Unsubscribe(ch)
+
+	m.UpdateNodePosition(PositionUpdate{
+		NodeNum:   0x12345678,
+		Latitude:  55.7558,
+		Longitude: 37.6173,
+		Altitude:  150,
+	})
+
+	dir := m.NodeDirectory()
+	entry := dir[0x12345678]
+	if entry.ShortName != "BN" {
+		t.Errorf("short_name = %q, want %q", entry.ShortName, "BN")
+	}
+	if entry.Latitude != 55.7558 {
+		t.Errorf("latitude = %f, want 55.7558", entry.Latitude)
+	}
+	if entry.Longitude != 37.6173 {
+		t.Errorf("longitude = %f, want 37.6173", entry.Longitude)
+	}
+	if entry.Altitude != 150 {
+		t.Errorf("altitude = %d, want 150", entry.Altitude)
+	}
+	if !entry.HasPosition() {
+		t.Error("HasPosition() should return true")
+	}
+
+	// Verify SSE event was published
+	select {
+	case evt := <-ch:
+		if evt.Type != "node_position_update" {
+			t.Fatalf("expected event type 'node_position_update', got %q", evt.Type)
+		}
+		pos, ok := evt.Data.(PositionUpdate)
+		if !ok {
+			t.Fatal("expected event data to be PositionUpdate")
+		}
+		if pos.NodeNum != 0x12345678 {
+			t.Errorf("NodeNum = %#x, want %#x", pos.NodeNum, uint32(0x12345678))
+		}
+		if pos.Latitude != 55.7558 {
+			t.Errorf("Latitude = %f, want 55.7558", pos.Latitude)
+		}
+		if pos.ShortName != "BN" {
+			t.Errorf("ShortName = %q, want %q", pos.ShortName, "BN")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for node_position_update event")
+	}
+}
+
+func TestUpdateNodePosition_UnknownNode(t *testing.T) {
+	m := New(10, 300)
+
+	// No SetNodeDirectory call — nodeDir is nil initially
+	m.UpdateNodePosition(PositionUpdate{
+		NodeNum:   0xAABBCCDD,
+		Latitude:  40.7128,
+		Longitude: -74.0060,
+		Altitude:  10,
+	})
+
+	dir := m.NodeDirectory()
+	entry := dir[0xAABBCCDD]
+	if entry.Latitude != 40.7128 {
+		t.Errorf("latitude = %f, want 40.7128", entry.Latitude)
+	}
+	if entry.Longitude != -74.0060 {
+		t.Errorf("longitude = %f, want -74.0060", entry.Longitude)
+	}
+	// ShortName should be empty for unknown node
+	if entry.ShortName != "" {
+		t.Errorf("short_name should be empty, got %q", entry.ShortName)
+	}
+}
+
+func TestUpdateNodePosition_OverwritesPrevious(t *testing.T) {
+	m := New(10, 300)
+	m.SetNodeDirectory(map[uint32]NodeEntry{
+		0x11: {ShortName: "A", LongName: "Alpha", Latitude: 10, Longitude: 20, Altitude: 100},
+	})
+
+	m.UpdateNodePosition(PositionUpdate{
+		NodeNum:   0x11,
+		Latitude:  30,
+		Longitude: 40,
+		Altitude:  200,
+	})
+
+	dir := m.NodeDirectory()
+	entry := dir[0x11]
+	if entry.Latitude != 30 {
+		t.Errorf("latitude = %f, want 30", entry.Latitude)
+	}
+	if entry.Longitude != 40 {
+		t.Errorf("longitude = %f, want 40", entry.Longitude)
+	}
+	if entry.Altitude != 200 {
+		t.Errorf("altitude = %d, want 200", entry.Altitude)
+	}
+	// Name should be preserved
+	if entry.ShortName != "A" {
+		t.Errorf("short_name = %q, want %q", entry.ShortName, "A")
+	}
+}
+
+func TestNodeEntry_HasPosition(t *testing.T) {
+	tests := []struct {
+		name  string
+		entry NodeEntry
+		want  bool
+	}{
+		{"zero", NodeEntry{}, false},
+		{"lat only", NodeEntry{Latitude: 1.0}, true},
+		{"lon only", NodeEntry{Longitude: 1.0}, true},
+		{"both", NodeEntry{Latitude: 55.0, Longitude: 37.0}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.entry.HasPosition(); got != tt.want {
+				t.Errorf("HasPosition() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// UpdateNodePosition extended fields tests
+// ---------------------------------------------------------------------------
+
+func TestUpdateNodePosition_ExtendedFields(t *testing.T) {
+	m := New(10, 300)
+	m.SetNodeDirectory(map[uint32]NodeEntry{
+		0x11: {ShortName: "M", LongName: "Mobile"},
+	})
+
+	ch := m.Subscribe()
+	defer m.Unsubscribe(ch)
+
+	m.UpdateNodePosition(PositionUpdate{
+		NodeNum:      0x11,
+		Latitude:     55.7,
+		Longitude:    37.6,
+		Altitude:     200,
+		GroundSpeed:  5,
+		GroundTrack:  180,
+		SatsInView:   12,
+		PositionTime: 1700000000,
+	})
+
+	dir := m.NodeDirectory()
+	entry := dir[0x11]
+	if entry.GroundSpeed != 5 {
+		t.Errorf("ground_speed = %d, want 5", entry.GroundSpeed)
+	}
+	if entry.GroundTrack != 180 {
+		t.Errorf("ground_track = %d, want 180", entry.GroundTrack)
+	}
+	if entry.SatsInView != 12 {
+		t.Errorf("sats_in_view = %d, want 12", entry.SatsInView)
+	}
+	if entry.PositionTime != 1700000000 {
+		t.Errorf("position_time = %d, want 1700000000", entry.PositionTime)
+	}
+
+	// Verify SSE event includes extended fields
+	select {
+	case evt := <-ch:
+		pos := evt.Data.(PositionUpdate)
+		if pos.GroundSpeed != 5 {
+			t.Errorf("event GroundSpeed = %d, want 5", pos.GroundSpeed)
+		}
+		if pos.SatsInView != 12 {
+			t.Errorf("event SatsInView = %d, want 12", pos.SatsInView)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for event")
+	}
+}
+
+func TestUpdateNodePosition_ZeroExtendedFieldsPreserved(t *testing.T) {
+	m := New(10, 300)
+	m.SetNodeDirectory(map[uint32]NodeEntry{
+		0x11: {
+			ShortName:   "M",
+			LongName:    "Mobile",
+			GroundSpeed: 10,
+			SatsInView:  8,
+		},
+	})
+
+	// Update with zero extended fields — should NOT overwrite existing values
+	m.UpdateNodePosition(PositionUpdate{
+		NodeNum:   0x11,
+		Latitude:  55.7,
+		Longitude: 37.6,
+		Altitude:  200,
+		// GroundSpeed, SatsInView etc. are zero
+	})
+
+	dir := m.NodeDirectory()
+	entry := dir[0x11]
+	if entry.GroundSpeed != 10 {
+		t.Errorf("ground_speed = %d, want 10 (preserved)", entry.GroundSpeed)
+	}
+	if entry.SatsInView != 8 {
+		t.Errorf("sats_in_view = %d, want 8 (preserved)", entry.SatsInView)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// UpdateNodeTelemetry tests
+// ---------------------------------------------------------------------------
+
+func TestUpdateNodeTelemetry_DeviceMetrics(t *testing.T) {
+	m := New(10, 300)
+	m.SetNodeDirectory(map[uint32]NodeEntry{
+		0xAA: {ShortName: "BN", LongName: "Base Node"},
+	})
+
+	ch := m.Subscribe()
+	defer m.Unsubscribe(ch)
+
+	m.UpdateNodeTelemetry(TelemetryUpdate{
+		NodeNum:            0xAA,
+		BatteryLevel:       75,
+		Voltage:            3.85,
+		ChannelUtilization: 12.5,
+		AirUtilTx:          2.3,
+		UptimeSeconds:      7200,
+	})
+
+	dir := m.NodeDirectory()
+	entry := dir[0xAA]
+	if entry.BatteryLevel != 75 {
+		t.Errorf("battery_level = %d, want 75", entry.BatteryLevel)
+	}
+	if entry.Voltage != 3.85 {
+		t.Errorf("voltage = %f, want 3.85", entry.Voltage)
+	}
+	if entry.ChannelUtilization != 12.5 {
+		t.Errorf("channel_utilization = %f, want 12.5", entry.ChannelUtilization)
+	}
+	if entry.AirUtilTx != 2.3 {
+		t.Errorf("air_util_tx = %f, want 2.3", entry.AirUtilTx)
+	}
+	if entry.UptimeSeconds != 7200 {
+		t.Errorf("uptime_seconds = %d, want 7200", entry.UptimeSeconds)
+	}
+	if entry.ShortName != "BN" {
+		t.Errorf("short_name = %q, want %q (preserved)", entry.ShortName, "BN")
+	}
+
+	// Verify SSE event
+	select {
+	case evt := <-ch:
+		if evt.Type != "node_telemetry_update" {
+			t.Fatalf("expected event type 'node_telemetry_update', got %q", evt.Type)
+		}
+		tel := evt.Data.(TelemetryUpdate)
+		if tel.NodeNum != 0xAA {
+			t.Errorf("NodeNum = %#x, want %#x", tel.NodeNum, uint32(0xAA))
+		}
+		if tel.BatteryLevel != 75 {
+			t.Errorf("BatteryLevel = %d, want 75", tel.BatteryLevel)
+		}
+		if tel.ShortName != "BN" {
+			t.Errorf("ShortName = %q, want %q", tel.ShortName, "BN")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for node_telemetry_update event")
+	}
+}
+
+func TestUpdateNodeTelemetry_EnvironmentMetrics(t *testing.T) {
+	m := New(10, 300)
+	m.SetNodeDirectory(map[uint32]NodeEntry{
+		0xBB: {ShortName: "EN", LongName: "Env Node"},
+	})
+
+	m.UpdateNodeTelemetry(TelemetryUpdate{
+		NodeNum:            0xBB,
+		Temperature:        22.5,
+		RelativeHumidity:   55.0,
+		BarometricPressure: 1013.25,
+	})
+
+	dir := m.NodeDirectory()
+	entry := dir[0xBB]
+	if entry.Temperature != 22.5 {
+		t.Errorf("temperature = %f, want 22.5", entry.Temperature)
+	}
+	if entry.RelativeHumidity != 55.0 {
+		t.Errorf("relative_humidity = %f, want 55.0", entry.RelativeHumidity)
+	}
+	if entry.BarometricPressure != 1013.25 {
+		t.Errorf("barometric_pressure = %f, want 1013.25", entry.BarometricPressure)
+	}
+}
+
+func TestUpdateNodeTelemetry_UnknownNode(t *testing.T) {
+	m := New(10, 300)
+
+	// No SetNodeDirectory — nodeDir is nil initially
+	m.UpdateNodeTelemetry(TelemetryUpdate{
+		NodeNum:      0xCC,
+		BatteryLevel: 50,
+	})
+
+	dir := m.NodeDirectory()
+	entry := dir[0xCC]
+	if entry.BatteryLevel != 50 {
+		t.Errorf("battery_level = %d, want 50", entry.BatteryLevel)
+	}
+	if entry.ShortName != "" {
+		t.Errorf("short_name should be empty, got %q", entry.ShortName)
+	}
+}
+
+func TestUpdateNodeTelemetry_ZeroFieldsPreserved(t *testing.T) {
+	m := New(10, 300)
+	m.SetNodeDirectory(map[uint32]NodeEntry{
+		0xDD: {
+			ShortName:    "TN",
+			LongName:     "Test Node",
+			BatteryLevel: 80,
+			Voltage:      4.1,
+			Temperature:  25.0,
+		},
+	})
+
+	// Update with only environment metrics — device metrics should be preserved
+	m.UpdateNodeTelemetry(TelemetryUpdate{
+		NodeNum:            0xDD,
+		Temperature:        22.0,
+		RelativeHumidity:   60.0,
+		BarometricPressure: 1015.0,
+	})
+
+	dir := m.NodeDirectory()
+	entry := dir[0xDD]
+	// Preserved from original
+	if entry.BatteryLevel != 80 {
+		t.Errorf("battery_level = %d, want 80 (preserved)", entry.BatteryLevel)
+	}
+	if entry.Voltage != 4.1 {
+		t.Errorf("voltage = %f, want 4.1 (preserved)", entry.Voltage)
+	}
+	// Updated
+	if entry.Temperature != 22.0 {
+		t.Errorf("temperature = %f, want 22.0", entry.Temperature)
+	}
+	if entry.RelativeHumidity != 60.0 {
+		t.Errorf("relative_humidity = %f, want 60.0", entry.RelativeHumidity)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// UpdateNodeSignal tests
+// ---------------------------------------------------------------------------
+
+func TestUpdateNodeSignal_ExistingNode(t *testing.T) {
+	m := New(10, 300)
+	m.SetNodeDirectory(map[uint32]NodeEntry{
+		0xAA: {ShortName: "BN", LongName: "Base Node"},
+	})
+
+	ch := m.Subscribe()
+	defer m.Unsubscribe(ch)
+
+	m.UpdateNodeSignal(SignalUpdate{
+		NodeNum: 0xAA,
+		RxRssi:  -87,
+		RxSnr:   6.5,
+	})
+
+	dir := m.NodeDirectory()
+	entry := dir[0xAA]
+	if entry.RxRssi != -87 {
+		t.Errorf("rx_rssi = %d, want -87", entry.RxRssi)
+	}
+	if entry.RxSnr != 6.5 {
+		t.Errorf("rx_snr = %f, want 6.5", entry.RxSnr)
+	}
+	if entry.ShortName != "BN" {
+		t.Errorf("short_name = %q, want %q (preserved)", entry.ShortName, "BN")
+	}
+
+	// Verify SSE event
+	select {
+	case evt := <-ch:
+		if evt.Type != "node_signal_update" {
+			t.Fatalf("expected event type 'node_signal_update', got %q", evt.Type)
+		}
+		sig, ok := evt.Data.(SignalUpdate)
+		if !ok {
+			t.Fatal("expected event data to be SignalUpdate")
+		}
+		if sig.NodeNum != 0xAA {
+			t.Errorf("NodeNum = %#x, want %#x", sig.NodeNum, uint32(0xAA))
+		}
+		if sig.RxRssi != -87 {
+			t.Errorf("RxRssi = %d, want -87", sig.RxRssi)
+		}
+		if sig.RxSnr != 6.5 {
+			t.Errorf("RxSnr = %f, want 6.5", sig.RxSnr)
+		}
+		if sig.ShortName != "BN" {
+			t.Errorf("ShortName = %q, want %q", sig.ShortName, "BN")
+		}
+		if sig.LongName != "Base Node" {
+			t.Errorf("LongName = %q, want %q", sig.LongName, "Base Node")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for node_signal_update event")
+	}
+}
+
+func TestUpdateNodeSignal_UnknownNode(t *testing.T) {
+	m := New(10, 300)
+
+	// No SetNodeDirectory — nodeDir is nil initially
+	m.UpdateNodeSignal(SignalUpdate{
+		NodeNum: 0xCC,
+		RxRssi:  -95,
+		RxSnr:   3.0,
+	})
+
+	dir := m.NodeDirectory()
+	entry := dir[0xCC]
+	if entry.RxRssi != -95 {
+		t.Errorf("rx_rssi = %d, want -95", entry.RxRssi)
+	}
+	if entry.RxSnr != 3.0 {
+		t.Errorf("rx_snr = %f, want 3.0", entry.RxSnr)
+	}
+	if entry.ShortName != "" {
+		t.Errorf("short_name should be empty, got %q", entry.ShortName)
+	}
+}
+
+func TestUpdateNodeSignal_ZeroFieldsPreserved(t *testing.T) {
+	m := New(10, 300)
+	m.SetNodeDirectory(map[uint32]NodeEntry{
+		0xDD: {
+			ShortName: "SN",
+			LongName:  "Signal Node",
+			RxRssi:    -80,
+			RxSnr:     5.0,
+		},
+	})
+
+	// Update with only RSSI — SNR should be preserved
+	m.UpdateNodeSignal(SignalUpdate{
+		NodeNum: 0xDD,
+		RxRssi:  -90,
+		// RxSnr is zero, should not overwrite
+	})
+
+	dir := m.NodeDirectory()
+	entry := dir[0xDD]
+	if entry.RxRssi != -90 {
+		t.Errorf("rx_rssi = %d, want -90", entry.RxRssi)
+	}
+	if entry.RxSnr != 5.0 {
+		t.Errorf("rx_snr = %f, want 5.0 (preserved)", entry.RxSnr)
+	}
+}
+
+func TestUpdateNodeSignal_OverwritesPrevious(t *testing.T) {
+	m := New(10, 300)
+	m.SetNodeDirectory(map[uint32]NodeEntry{
+		0xEE: {
+			ShortName: "ON",
+			LongName:  "Old Node",
+			RxRssi:    -70,
+			RxSnr:     10.0,
+		},
+	})
+
+	m.UpdateNodeSignal(SignalUpdate{
+		NodeNum: 0xEE,
+		RxRssi:  -100,
+		RxSnr:   -5.0,
+	})
+
+	dir := m.NodeDirectory()
+	entry := dir[0xEE]
+	if entry.RxRssi != -100 {
+		t.Errorf("rx_rssi = %d, want -100", entry.RxRssi)
+	}
+	if entry.RxSnr != -5.0 {
+		t.Errorf("rx_snr = %f, want -5.0", entry.RxSnr)
+	}
+	// Name should be preserved
+	if entry.ShortName != "ON" {
+		t.Errorf("short_name = %q, want %q", entry.ShortName, "ON")
+	}
+}
+
+func TestUpdateNodeSignal_PreservesOtherFields(t *testing.T) {
+	m := New(10, 300)
+	m.SetNodeDirectory(map[uint32]NodeEntry{
+		0xFF: {
+			ShortName:    "FN",
+			LongName:     "Full Node",
+			Latitude:     55.7,
+			Longitude:    37.6,
+			BatteryLevel: 85,
+			Voltage:      4.0,
+		},
+	})
+
+	m.UpdateNodeSignal(SignalUpdate{
+		NodeNum: 0xFF,
+		RxRssi:  -88,
+		RxSnr:   7.5,
+	})
+
+	dir := m.NodeDirectory()
+	entry := dir[0xFF]
+	// Signal fields updated
+	if entry.RxRssi != -88 {
+		t.Errorf("rx_rssi = %d, want -88", entry.RxRssi)
+	}
+	if entry.RxSnr != 7.5 {
+		t.Errorf("rx_snr = %f, want 7.5", entry.RxSnr)
+	}
+	// Other fields preserved
+	if entry.Latitude != 55.7 {
+		t.Errorf("latitude = %f, want 55.7 (preserved)", entry.Latitude)
+	}
+	if entry.Longitude != 37.6 {
+		t.Errorf("longitude = %f, want 37.6 (preserved)", entry.Longitude)
+	}
+	if entry.BatteryLevel != 85 {
+		t.Errorf("battery_level = %d, want 85 (preserved)", entry.BatteryLevel)
+	}
+}

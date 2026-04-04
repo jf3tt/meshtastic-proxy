@@ -1846,3 +1846,790 @@ func TestDecodeTelemetry_UnknownVariant(t *testing.T) {
 		t.Errorf("got %q, want %q", result, "telemetry")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// ExtractNodeDirectory with Position tests
+// ---------------------------------------------------------------------------
+
+func TestExtractNodeDirectory_WithPosition(t *testing.T) {
+	latI := int32(375000000)   // 37.5
+	lonI := int32(-1225000000) // -122.5
+	altI := int32(100)
+
+	frames := [][]byte{
+		marshalFromRadio(t, &pb.FromRadio{
+			PayloadVariant: &pb.FromRadio_NodeInfo{
+				NodeInfo: &pb.NodeInfo{
+					Num: 0x12345678,
+					User: &pb.User{
+						LongName:  "GPS Node",
+						ShortName: "GN",
+					},
+					Position: &pb.Position{
+						LatitudeI:  &latI,
+						LongitudeI: &lonI,
+						Altitude:   &altI,
+					},
+				},
+			},
+		}),
+	}
+
+	dir := ExtractNodeDirectory(frames)
+
+	if len(dir) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(dir))
+	}
+
+	entry := dir[0x12345678]
+	if entry.ShortName != "GN" {
+		t.Errorf("short_name = %q, want %q", entry.ShortName, "GN")
+	}
+
+	wantLat := 37.5
+	wantLon := -122.5
+	if diff := entry.Latitude - wantLat; diff > 0.0001 || diff < -0.0001 {
+		t.Errorf("latitude = %f, want %f", entry.Latitude, wantLat)
+	}
+	if diff := entry.Longitude - wantLon; diff > 0.0001 || diff < -0.0001 {
+		t.Errorf("longitude = %f, want %f", entry.Longitude, wantLon)
+	}
+	if entry.Altitude != 100 {
+		t.Errorf("altitude = %d, want 100", entry.Altitude)
+	}
+	if !entry.HasPosition() {
+		t.Error("HasPosition() should return true")
+	}
+}
+
+func TestExtractNodeDirectory_ZeroPositionIgnored(t *testing.T) {
+	latI := int32(0)
+	lonI := int32(0)
+
+	frames := [][]byte{
+		marshalFromRadio(t, &pb.FromRadio{
+			PayloadVariant: &pb.FromRadio_NodeInfo{
+				NodeInfo: &pb.NodeInfo{
+					Num: 0xAAAAAAAA,
+					User: &pb.User{
+						LongName:  "No GPS",
+						ShortName: "NG",
+					},
+					Position: &pb.Position{
+						LatitudeI:  &latI,
+						LongitudeI: &lonI,
+					},
+				},
+			},
+		}),
+	}
+
+	dir := ExtractNodeDirectory(frames)
+	entry := dir[0xAAAAAAAA]
+	if entry.HasPosition() {
+		t.Error("HasPosition() should return false for zero coordinates")
+	}
+	if entry.Latitude != 0 || entry.Longitude != 0 {
+		t.Error("zero coordinates should not be stored")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ExtractPosition tests
+// ---------------------------------------------------------------------------
+
+func TestExtractPosition_ValidPositionApp(t *testing.T) {
+	latI := int32(555000000) // 55.5
+	lonI := int32(372000000) // 37.2
+	altI := int32(200)
+
+	posData, err := proto.Marshal(&pb.Position{
+		LatitudeI:  &latI,
+		LongitudeI: &lonI,
+		Altitude:   &altI,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From: 0xDEADBEEF,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum: pb.PortNum_POSITION_APP,
+						Payload: posData,
+					},
+				},
+			},
+		},
+	})
+
+	pos := ExtractPosition(payload)
+	if pos == nil {
+		t.Fatal("expected non-nil position")
+	}
+	if pos.NodeNum != 0xDEADBEEF {
+		t.Errorf("NodeNum = %#x, want %#x", pos.NodeNum, uint32(0xDEADBEEF))
+	}
+	if diff := pos.Latitude - 55.5; diff > 0.0001 || diff < -0.0001 {
+		t.Errorf("Latitude = %f, want 55.5", pos.Latitude)
+	}
+	if diff := pos.Longitude - 37.2; diff > 0.0001 || diff < -0.0001 {
+		t.Errorf("Longitude = %f, want 37.2", pos.Longitude)
+	}
+	if pos.Altitude != 200 {
+		t.Errorf("Altitude = %d, want 200", pos.Altitude)
+	}
+}
+
+func TestExtractPosition_ZeroCoords(t *testing.T) {
+	latI := int32(0)
+	lonI := int32(0)
+
+	posData, err := proto.Marshal(&pb.Position{
+		LatitudeI:  &latI,
+		LongitudeI: &lonI,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From: 0x11111111,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum: pb.PortNum_POSITION_APP,
+						Payload: posData,
+					},
+				},
+			},
+		},
+	})
+
+	pos := ExtractPosition(payload)
+	if pos != nil {
+		t.Error("expected nil for zero coordinates")
+	}
+}
+
+func TestExtractPosition_NotPositionApp(t *testing.T) {
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From: 0x11111111,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum: pb.PortNum_TEXT_MESSAGE_APP,
+						Payload: []byte("hello"),
+					},
+				},
+			},
+		},
+	})
+
+	pos := ExtractPosition(payload)
+	if pos != nil {
+		t.Error("expected nil for non-POSITION_APP")
+	}
+}
+
+func TestExtractPosition_EncryptedPacket(t *testing.T) {
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From: 0x22222222,
+				PayloadVariant: &pb.MeshPacket_Encrypted{
+					Encrypted: []byte("encrypted-data"),
+				},
+			},
+		},
+	})
+
+	pos := ExtractPosition(payload)
+	if pos != nil {
+		t.Error("expected nil for encrypted packet")
+	}
+}
+
+func TestExtractPosition_NonPacketFrame(t *testing.T) {
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_MyInfo{
+			MyInfo: &pb.MyNodeInfo{MyNodeNum: 1},
+		},
+	})
+
+	pos := ExtractPosition(payload)
+	if pos != nil {
+		t.Error("expected nil for non-packet frame")
+	}
+}
+
+func TestExtractPosition_GarbagePayload(t *testing.T) {
+	pos := ExtractPosition([]byte{0xFF, 0xFE, 0xFD})
+	if pos != nil {
+		t.Error("expected nil for garbage payload")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ExtractPosition extended fields tests
+// ---------------------------------------------------------------------------
+
+func TestExtractPosition_ExtendedFields(t *testing.T) {
+	latI := int32(555000000) // 55.5
+	lonI := int32(372000000) // 37.2
+	altI := int32(200)
+
+	posData, err := proto.Marshal(&pb.Position{
+		LatitudeI:   &latI,
+		LongitudeI:  &lonI,
+		Altitude:    &altI,
+		GroundSpeed: proto.Uint32(5),
+		GroundTrack: proto.Uint32(180),
+		SatsInView:  12,
+		Time:        1700000000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From: 0xDEADBEEF,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum: pb.PortNum_POSITION_APP,
+						Payload: posData,
+					},
+				},
+			},
+		},
+	})
+
+	pos := ExtractPosition(payload)
+	if pos == nil {
+		t.Fatal("expected non-nil position")
+	}
+	if pos.GroundSpeed != 5 {
+		t.Errorf("GroundSpeed = %d, want 5", pos.GroundSpeed)
+	}
+	if pos.GroundTrack != 180 {
+		t.Errorf("GroundTrack = %d, want 180", pos.GroundTrack)
+	}
+	if pos.SatsInView != 12 {
+		t.Errorf("SatsInView = %d, want 12", pos.SatsInView)
+	}
+	if pos.PositionTime != 1700000000 {
+		t.Errorf("PositionTime = %d, want 1700000000", pos.PositionTime)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ExtractTelemetry tests
+// ---------------------------------------------------------------------------
+
+func TestExtractTelemetry_DeviceMetrics(t *testing.T) {
+	telData, err := proto.Marshal(&pb.Telemetry{
+		Variant: &pb.Telemetry_DeviceMetrics{
+			DeviceMetrics: &pb.DeviceMetrics{
+				BatteryLevel:       proto.Uint32(80),
+				Voltage:            proto.Float32(4.1),
+				ChannelUtilization: proto.Float32(5.0),
+				AirUtilTx:          proto.Float32(1.5),
+				UptimeSeconds:      proto.Uint32(7200),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From: 0xAABBCCDD,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum: pb.PortNum_TELEMETRY_APP,
+						Payload: telData,
+					},
+				},
+			},
+		},
+	})
+
+	tel := ExtractTelemetry(payload)
+	if tel == nil {
+		t.Fatal("expected non-nil telemetry")
+	}
+	if tel.NodeNum != 0xAABBCCDD {
+		t.Errorf("NodeNum = %#x, want %#x", tel.NodeNum, uint32(0xAABBCCDD))
+	}
+	if tel.BatteryLevel != 80 {
+		t.Errorf("BatteryLevel = %d, want 80", tel.BatteryLevel)
+	}
+	if tel.Voltage != 4.1 {
+		t.Errorf("Voltage = %f, want 4.1", tel.Voltage)
+	}
+	if tel.ChannelUtilization != 5.0 {
+		t.Errorf("ChannelUtilization = %f, want 5.0", tel.ChannelUtilization)
+	}
+	if tel.AirUtilTx != 1.5 {
+		t.Errorf("AirUtilTx = %f, want 1.5", tel.AirUtilTx)
+	}
+	if tel.UptimeSeconds != 7200 {
+		t.Errorf("UptimeSeconds = %d, want 7200", tel.UptimeSeconds)
+	}
+}
+
+func TestExtractTelemetry_EnvironmentMetrics(t *testing.T) {
+	telData, err := proto.Marshal(&pb.Telemetry{
+		Variant: &pb.Telemetry_EnvironmentMetrics{
+			EnvironmentMetrics: &pb.EnvironmentMetrics{
+				Temperature:        proto.Float32(22.5),
+				RelativeHumidity:   proto.Float32(55.0),
+				BarometricPressure: proto.Float32(1013.25),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From: 0x11223344,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum: pb.PortNum_TELEMETRY_APP,
+						Payload: telData,
+					},
+				},
+			},
+		},
+	})
+
+	tel := ExtractTelemetry(payload)
+	if tel == nil {
+		t.Fatal("expected non-nil telemetry")
+	}
+	if tel.NodeNum != 0x11223344 {
+		t.Errorf("NodeNum = %#x, want %#x", tel.NodeNum, uint32(0x11223344))
+	}
+	if tel.Temperature != 22.5 {
+		t.Errorf("Temperature = %f, want 22.5", tel.Temperature)
+	}
+	if tel.RelativeHumidity != 55.0 {
+		t.Errorf("RelativeHumidity = %f, want 55.0", tel.RelativeHumidity)
+	}
+	if tel.BarometricPressure != 1013.25 {
+		t.Errorf("BarometricPressure = %f, want 1013.25", tel.BarometricPressure)
+	}
+	// Device metrics should be zero
+	if tel.BatteryLevel != 0 {
+		t.Errorf("BatteryLevel = %d, want 0", tel.BatteryLevel)
+	}
+}
+
+func TestExtractTelemetry_PowerMetrics_ReturnsNil(t *testing.T) {
+	telData, err := proto.Marshal(&pb.Telemetry{
+		Variant: &pb.Telemetry_PowerMetrics{
+			PowerMetrics: &pb.PowerMetrics{
+				Ch1Voltage: proto.Float32(5.0),
+				Ch1Current: proto.Float32(100.0),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From: 0x55555555,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum: pb.PortNum_TELEMETRY_APP,
+						Payload: telData,
+					},
+				},
+			},
+		},
+	})
+
+	tel := ExtractTelemetry(payload)
+	if tel != nil {
+		t.Error("expected nil for PowerMetrics (not stored)")
+	}
+}
+
+func TestExtractTelemetry_NotTelemetryApp(t *testing.T) {
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From: 0x11111111,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum: pb.PortNum_TEXT_MESSAGE_APP,
+						Payload: []byte("hello"),
+					},
+				},
+			},
+		},
+	})
+
+	tel := ExtractTelemetry(payload)
+	if tel != nil {
+		t.Error("expected nil for non-TELEMETRY_APP")
+	}
+}
+
+func TestExtractTelemetry_EncryptedPacket(t *testing.T) {
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From: 0x22222222,
+				PayloadVariant: &pb.MeshPacket_Encrypted{
+					Encrypted: []byte("encrypted-data"),
+				},
+			},
+		},
+	})
+
+	tel := ExtractTelemetry(payload)
+	if tel != nil {
+		t.Error("expected nil for encrypted packet")
+	}
+}
+
+func TestExtractTelemetry_NonPacketFrame(t *testing.T) {
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_MyInfo{
+			MyInfo: &pb.MyNodeInfo{MyNodeNum: 1},
+		},
+	})
+
+	tel := ExtractTelemetry(payload)
+	if tel != nil {
+		t.Error("expected nil for non-packet frame")
+	}
+}
+
+func TestExtractTelemetry_GarbagePayload(t *testing.T) {
+	tel := ExtractTelemetry([]byte{0xFF, 0xFE, 0xFD})
+	if tel != nil {
+		t.Error("expected nil for garbage payload")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ExtractNodeDirectory full fields tests
+// ---------------------------------------------------------------------------
+
+func TestExtractNodeDirectory_FullNodeInfo(t *testing.T) {
+	latI := int32(555000000) // 55.5
+	lonI := int32(376000000) // 37.6
+	altI := int32(150)
+
+	frames := [][]byte{
+		marshalFromRadio(t, &pb.FromRadio{
+			PayloadVariant: &pb.FromRadio_NodeInfo{
+				NodeInfo: &pb.NodeInfo{
+					Num: 0x12345678,
+					User: &pb.User{
+						Id:         "!12345678",
+						LongName:   "Full Node",
+						ShortName:  "FN",
+						HwModel:    pb.HardwareModel_HELTEC_V3,
+						Role:       pb.Config_DeviceConfig_ROUTER,
+						IsLicensed: true,
+					},
+					Position: &pb.Position{
+						LatitudeI:  &latI,
+						LongitudeI: &lonI,
+						Altitude:   &altI,
+						SatsInView: 10,
+					},
+					Snr:       6.5,
+					LastHeard: 1700000000,
+					HopsAway:  proto.Uint32(2),
+					ViaMqtt:   true,
+					Channel:   1,
+					DeviceMetrics: &pb.DeviceMetrics{
+						BatteryLevel:       proto.Uint32(75),
+						Voltage:            proto.Float32(3.85),
+						ChannelUtilization: proto.Float32(10.5),
+						AirUtilTx:          proto.Float32(2.0),
+						UptimeSeconds:      proto.Uint32(3600),
+					},
+				},
+			},
+		}),
+	}
+
+	dir := ExtractNodeDirectory(frames)
+	if len(dir) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(dir))
+	}
+
+	entry := dir[0x12345678]
+
+	// Identity
+	if entry.UserID != "!12345678" {
+		t.Errorf("user_id = %q, want %q", entry.UserID, "!12345678")
+	}
+	if entry.HwModel != "HELTEC_V3" {
+		t.Errorf("hw_model = %q, want %q", entry.HwModel, "HELTEC_V3")
+	}
+	if entry.Role != "ROUTER" {
+		t.Errorf("role = %q, want %q", entry.Role, "ROUTER")
+	}
+	if !entry.IsLicensed {
+		t.Error("is_licensed should be true")
+	}
+
+	// Radio
+	if entry.Snr != 6.5 {
+		t.Errorf("snr = %f, want 6.5", entry.Snr)
+	}
+	if entry.LastHeard != 1700000000 {
+		t.Errorf("last_heard = %d, want 1700000000", entry.LastHeard)
+	}
+	if entry.HopsAway != 2 {
+		t.Errorf("hops_away = %d, want 2", entry.HopsAway)
+	}
+	if !entry.ViaMqtt {
+		t.Error("via_mqtt should be true")
+	}
+	if entry.Channel != 1 {
+		t.Errorf("channel = %d, want 1", entry.Channel)
+	}
+
+	// Position
+	if diff := entry.Latitude - 55.5; diff > 0.0001 || diff < -0.0001 {
+		t.Errorf("latitude = %f, want 55.5", entry.Latitude)
+	}
+	if diff := entry.Longitude - 37.6; diff > 0.0001 || diff < -0.0001 {
+		t.Errorf("longitude = %f, want 37.6", entry.Longitude)
+	}
+	if entry.Altitude != 150 {
+		t.Errorf("altitude = %d, want 150", entry.Altitude)
+	}
+	if entry.SatsInView != 10 {
+		t.Errorf("sats_in_view = %d, want 10", entry.SatsInView)
+	}
+
+	// Device metrics
+	if entry.BatteryLevel != 75 {
+		t.Errorf("battery_level = %d, want 75", entry.BatteryLevel)
+	}
+	if entry.Voltage != 3.85 {
+		t.Errorf("voltage = %f, want 3.85", entry.Voltage)
+	}
+	if entry.ChannelUtilization != 10.5 {
+		t.Errorf("channel_utilization = %f, want 10.5", entry.ChannelUtilization)
+	}
+	if entry.AirUtilTx != 2.0 {
+		t.Errorf("air_util_tx = %f, want 2.0", entry.AirUtilTx)
+	}
+	if entry.UptimeSeconds != 3600 {
+		t.Errorf("uptime_seconds = %d, want 3600", entry.UptimeSeconds)
+	}
+}
+
+func TestExtractNodeDirectory_NoDeviceMetrics(t *testing.T) {
+	frames := [][]byte{
+		marshalFromRadio(t, &pb.FromRadio{
+			PayloadVariant: &pb.FromRadio_NodeInfo{
+				NodeInfo: &pb.NodeInfo{
+					Num: 0xBBBB,
+					User: &pb.User{
+						LongName:  "Simple Node",
+						ShortName: "SN",
+						HwModel:   pb.HardwareModel_TLORA_V2_1_1P6,
+					},
+					// No Position, no DeviceMetrics
+				},
+			},
+		}),
+	}
+
+	dir := ExtractNodeDirectory(frames)
+	entry := dir[0xBBBB]
+	if entry.HwModel != "TLORA_V2_1_1P6" {
+		t.Errorf("hw_model = %q, want %q", entry.HwModel, "TLORA_V2_1_1P6")
+	}
+	if entry.BatteryLevel != 0 {
+		t.Errorf("battery_level = %d, want 0", entry.BatteryLevel)
+	}
+	if entry.HasPosition() {
+		t.Error("HasPosition() should return false")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ExtractSignal tests
+// ---------------------------------------------------------------------------
+
+func TestExtractSignal_ValidPacketWithRssiAndSnr(t *testing.T) {
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From:   0xDEADBEEF,
+				RxRssi: -85,
+				RxSnr:  7.5,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum: pb.PortNum_POSITION_APP,
+						Payload: []byte{},
+					},
+				},
+			},
+		},
+	})
+
+	sig := ExtractSignal(payload)
+	if sig == nil {
+		t.Fatal("expected non-nil signal")
+	}
+	if sig.NodeNum != 0xDEADBEEF {
+		t.Errorf("NodeNum = %#x, want %#x", sig.NodeNum, uint32(0xDEADBEEF))
+	}
+	if sig.RxRssi != -85 {
+		t.Errorf("RxRssi = %d, want -85", sig.RxRssi)
+	}
+	if sig.RxSnr != 7.5 {
+		t.Errorf("RxSnr = %f, want 7.5", sig.RxSnr)
+	}
+}
+
+func TestExtractSignal_ZeroRssiReturnsNil(t *testing.T) {
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From:   0xAABBCCDD,
+				RxRssi: 0, // zero RSSI → no signal info
+				RxSnr:  5.0,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum: pb.PortNum_TEXT_MESSAGE_APP,
+						Payload: []byte("hello"),
+					},
+				},
+			},
+		},
+	})
+
+	sig := ExtractSignal(payload)
+	if sig != nil {
+		t.Error("expected nil for zero RxRssi")
+	}
+}
+
+func TestExtractSignal_ZeroFromReturnsNil(t *testing.T) {
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From:   0, // zero From → invalid
+				RxRssi: -90,
+				RxSnr:  3.0,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum: pb.PortNum_TEXT_MESSAGE_APP,
+						Payload: []byte("test"),
+					},
+				},
+			},
+		},
+	})
+
+	sig := ExtractSignal(payload)
+	if sig != nil {
+		t.Error("expected nil for zero From")
+	}
+}
+
+func TestExtractSignal_NonPacketFrameReturnsNil(t *testing.T) {
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_MyInfo{
+			MyInfo: &pb.MyNodeInfo{MyNodeNum: 1},
+		},
+	})
+
+	sig := ExtractSignal(payload)
+	if sig != nil {
+		t.Error("expected nil for non-packet frame")
+	}
+}
+
+func TestExtractSignal_EncryptedPacketWithRssi(t *testing.T) {
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From:   0x11223344,
+				RxRssi: -100,
+				RxSnr:  -5.0,
+				PayloadVariant: &pb.MeshPacket_Encrypted{
+					Encrypted: []byte("encrypted-data"),
+				},
+			},
+		},
+	})
+
+	sig := ExtractSignal(payload)
+	if sig == nil {
+		t.Fatal("expected non-nil signal for encrypted packet with RSSI")
+	}
+	if sig.NodeNum != 0x11223344 {
+		t.Errorf("NodeNum = %#x, want %#x", sig.NodeNum, uint32(0x11223344))
+	}
+	if sig.RxRssi != -100 {
+		t.Errorf("RxRssi = %d, want -100", sig.RxRssi)
+	}
+	if sig.RxSnr != -5.0 {
+		t.Errorf("RxSnr = %f, want -5.0", sig.RxSnr)
+	}
+}
+
+func TestExtractSignal_GarbagePayload(t *testing.T) {
+	sig := ExtractSignal([]byte{0xFF, 0xFE, 0xFD})
+	if sig != nil {
+		t.Error("expected nil for garbage payload")
+	}
+}
+
+func TestExtractSignal_RssiOnlyNoSnr(t *testing.T) {
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From:   0x55667788,
+				RxRssi: -110,
+				RxSnr:  0, // zero SNR is valid (can happen)
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum: pb.PortNum_TELEMETRY_APP,
+						Payload: []byte{},
+					},
+				},
+			},
+		},
+	})
+
+	sig := ExtractSignal(payload)
+	if sig == nil {
+		t.Fatal("expected non-nil signal (zero SNR is valid when RSSI is present)")
+	}
+	if sig.RxRssi != -110 {
+		t.Errorf("RxRssi = %d, want -110", sig.RxRssi)
+	}
+	if sig.RxSnr != 0 {
+		t.Errorf("RxSnr = %f, want 0", sig.RxSnr)
+	}
+}

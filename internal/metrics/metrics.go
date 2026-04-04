@@ -8,10 +8,92 @@ import (
 	"time"
 )
 
-// NodeEntry stores identity information for a single mesh node.
+// NodeEntry stores all known information about a single mesh node.
 type NodeEntry struct {
-	ShortName string `json:"short_name"`
-	LongName  string `json:"long_name"`
+	// Identity (from NodeInfo.User)
+	ShortName  string `json:"short_name"`
+	LongName   string `json:"long_name"`
+	UserID     string `json:"user_id,omitempty"`     // hex ID e.g. "!aabbccdd"
+	HwModel    string `json:"hw_model,omitempty"`    // e.g. "HELTEC_V3"
+	Role       string `json:"role,omitempty"`        // e.g. "CLIENT", "ROUTER"
+	IsLicensed bool   `json:"is_licensed,omitempty"` // HAM radio licensed
+
+	// Radio (from NodeInfo)
+	Snr        float32 `json:"snr,omitempty"`
+	LastHeard  uint32  `json:"last_heard,omitempty"` // unix timestamp
+	HopsAway   uint32  `json:"hops_away,omitempty"`
+	ViaMqtt    bool    `json:"via_mqtt,omitempty"`
+	IsFavorite bool    `json:"is_favorite,omitempty"`
+	Channel    uint32  `json:"channel,omitempty"`
+
+	// Position (from NodeInfo.Position or POSITION_APP)
+	Latitude     float64 `json:"latitude,omitempty"`
+	Longitude    float64 `json:"longitude,omitempty"`
+	Altitude     int32   `json:"altitude,omitempty"`
+	GroundSpeed  uint32  `json:"ground_speed,omitempty"` // m/s
+	GroundTrack  uint32  `json:"ground_track,omitempty"` // degrees (0-360)
+	SatsInView   uint32  `json:"sats_in_view,omitempty"`
+	PositionTime uint32  `json:"position_time,omitempty"` // unix timestamp of position fix
+
+	// Device telemetry (from TELEMETRY_APP DeviceMetrics)
+	BatteryLevel       uint32  `json:"battery_level,omitempty"`       // 0-100%
+	Voltage            float32 `json:"voltage,omitempty"`             // volts
+	ChannelUtilization float32 `json:"channel_utilization,omitempty"` // percentage
+	AirUtilTx          float32 `json:"air_util_tx,omitempty"`         // percentage
+	UptimeSeconds      uint32  `json:"uptime_seconds,omitempty"`
+
+	// Environment telemetry (from TELEMETRY_APP EnvironmentMetrics)
+	Temperature        float32 `json:"temperature,omitempty"`         // Celsius
+	RelativeHumidity   float32 `json:"relative_humidity,omitempty"`   // percentage
+	BarometricPressure float32 `json:"barometric_pressure,omitempty"` // hPa
+
+	// Signal quality (updated from incoming MeshPacket RxRssi/RxSnr)
+	RxRssi int32   `json:"rx_rssi,omitempty"` // RSSI at receiver (dBm, negative)
+	RxSnr  float32 `json:"rx_snr,omitempty"`  // SNR at receiver (dB)
+}
+
+// HasPosition returns true if the node has valid GPS coordinates.
+func (e NodeEntry) HasPosition() bool {
+	return e.Latitude != 0 || e.Longitude != 0
+}
+
+// PositionUpdate is published via SSE when a node's position changes.
+type PositionUpdate struct {
+	NodeNum      uint32  `json:"node_num"`
+	ShortName    string  `json:"short_name"`
+	LongName     string  `json:"long_name"`
+	Latitude     float64 `json:"latitude"`
+	Longitude    float64 `json:"longitude"`
+	Altitude     int32   `json:"altitude"`
+	GroundSpeed  uint32  `json:"ground_speed,omitempty"`
+	GroundTrack  uint32  `json:"ground_track,omitempty"`
+	SatsInView   uint32  `json:"sats_in_view,omitempty"`
+	PositionTime uint32  `json:"position_time,omitempty"`
+}
+
+// TelemetryUpdate is published via SSE when a node's telemetry changes.
+type TelemetryUpdate struct {
+	NodeNum            uint32  `json:"node_num"`
+	ShortName          string  `json:"short_name"`
+	LongName           string  `json:"long_name"`
+	BatteryLevel       uint32  `json:"battery_level,omitempty"`
+	Voltage            float32 `json:"voltage,omitempty"`
+	ChannelUtilization float32 `json:"channel_utilization,omitempty"`
+	AirUtilTx          float32 `json:"air_util_tx,omitempty"`
+	UptimeSeconds      uint32  `json:"uptime_seconds,omitempty"`
+	Temperature        float32 `json:"temperature,omitempty"`
+	RelativeHumidity   float32 `json:"relative_humidity,omitempty"`
+	BarometricPressure float32 `json:"barometric_pressure,omitempty"`
+}
+
+// SignalUpdate is published via SSE when a node's signal quality changes
+// (from an incoming MeshPacket's RxRssi/RxSnr fields).
+type SignalUpdate struct {
+	NodeNum   uint32  `json:"node_num"`
+	ShortName string  `json:"short_name"`
+	LongName  string  `json:"long_name"`
+	RxRssi    int32   `json:"rx_rssi"`
+	RxSnr     float32 `json:"rx_snr"`
 }
 
 // MessageRecord stores information about a proxied message.
@@ -258,6 +340,113 @@ func (m *Metrics) ResolveRelay(relayByte uint8) []NodeEntry {
 		}
 	}
 	return result
+}
+
+// UpdateNodePosition updates the position of a single node in the directory
+// and publishes an SSE event so the map updates in real time.
+func (m *Metrics) UpdateNodePosition(update PositionUpdate) {
+	m.nodeDirMu.Lock()
+	if m.nodeDir == nil {
+		m.nodeDir = make(map[uint32]NodeEntry)
+	}
+	entry := m.nodeDir[update.NodeNum]
+	entry.Latitude = update.Latitude
+	entry.Longitude = update.Longitude
+	entry.Altitude = update.Altitude
+	if update.GroundSpeed > 0 {
+		entry.GroundSpeed = update.GroundSpeed
+	}
+	if update.GroundTrack > 0 {
+		entry.GroundTrack = update.GroundTrack
+	}
+	if update.SatsInView > 0 {
+		entry.SatsInView = update.SatsInView
+	}
+	if update.PositionTime > 0 {
+		entry.PositionTime = update.PositionTime
+	}
+	m.nodeDir[update.NodeNum] = entry
+
+	// Fill names for SSE event from stored entry.
+	update.ShortName = entry.ShortName
+	update.LongName = entry.LongName
+	m.nodeDirMu.Unlock()
+
+	m.publish(Event{Type: "node_position_update", Data: update})
+}
+
+// UpdateNodeTelemetry updates telemetry data for a single node in the directory
+// and publishes an SSE event so the dashboard updates in real time.
+func (m *Metrics) UpdateNodeTelemetry(update TelemetryUpdate) {
+	m.nodeDirMu.Lock()
+	if m.nodeDir == nil {
+		m.nodeDir = make(map[uint32]NodeEntry)
+	}
+	entry := m.nodeDir[update.NodeNum]
+
+	// Device metrics
+	if update.BatteryLevel > 0 {
+		entry.BatteryLevel = update.BatteryLevel
+	}
+	if update.Voltage > 0 {
+		entry.Voltage = update.Voltage
+	}
+	if update.ChannelUtilization > 0 {
+		entry.ChannelUtilization = update.ChannelUtilization
+	}
+	if update.AirUtilTx > 0 {
+		entry.AirUtilTx = update.AirUtilTx
+	}
+	if update.UptimeSeconds > 0 {
+		entry.UptimeSeconds = update.UptimeSeconds
+	}
+
+	// Environment metrics
+	if update.Temperature != 0 {
+		entry.Temperature = update.Temperature
+	}
+	if update.RelativeHumidity != 0 {
+		entry.RelativeHumidity = update.RelativeHumidity
+	}
+	if update.BarometricPressure != 0 {
+		entry.BarometricPressure = update.BarometricPressure
+	}
+
+	m.nodeDir[update.NodeNum] = entry
+
+	// Fill names for SSE event from stored entry.
+	update.ShortName = entry.ShortName
+	update.LongName = entry.LongName
+	m.nodeDirMu.Unlock()
+
+	m.publish(Event{Type: "node_telemetry_update", Data: update})
+}
+
+// UpdateNodeSignal updates the signal quality (RSSI/SNR) for a single node
+// in the directory and publishes an SSE event so the heatmap updates in real time.
+// Called when a MeshPacket is received with non-zero RxRssi from a known node.
+func (m *Metrics) UpdateNodeSignal(update SignalUpdate) {
+	m.nodeDirMu.Lock()
+	if m.nodeDir == nil {
+		m.nodeDir = make(map[uint32]NodeEntry)
+	}
+	entry := m.nodeDir[update.NodeNum]
+
+	if update.RxRssi != 0 {
+		entry.RxRssi = update.RxRssi
+	}
+	if update.RxSnr != 0 {
+		entry.RxSnr = update.RxSnr
+	}
+
+	m.nodeDir[update.NodeNum] = entry
+
+	// Fill names for SSE event from stored entry.
+	update.ShortName = entry.ShortName
+	update.LongName = entry.LongName
+	m.nodeDirMu.Unlock()
+
+	m.publish(Event{Type: "node_signal_update", Data: update})
 }
 
 // RecordMessage adds a message to the log.

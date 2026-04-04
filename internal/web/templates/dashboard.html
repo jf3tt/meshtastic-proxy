@@ -7,7 +7,108 @@
     <title>Meshtastic Proxy Dashboard</title>
     <link rel="stylesheet" href="/static/tailwind.css">
     <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/leaflet.css">
     <script src="/static/chart.js"></script>
+    <script src="/static/leaflet.js"></script>
+    <script src="/static/leaflet-heat.js"></script>
+    <style>
+        /* Leaflet dark theme overrides */
+        .leaflet-container { background: #030712; }
+        .leaflet-control-zoom a { background: #1f2937 !important; color: #d1d5db !important; border-color: #374151 !important; }
+        .leaflet-control-zoom a:hover { background: #374151 !important; }
+        .leaflet-control-attribution { background: rgba(3,7,18,0.8) !important; color: #6b7280 !important; }
+        .leaflet-control-attribution a { color: #9ca3af !important; }
+        .leaflet-popup-content-wrapper { background: #111827; color: #e5e7eb; border: 1px solid #374151; border-radius: 0.75rem; }
+        .leaflet-popup-tip { background: #111827; border: 1px solid #374151; }
+        .leaflet-popup-content { margin: 12px 16px; font-size: 13px; line-height: 1.5; }
+        /* Node popup sections */
+        .np { font-family: ui-monospace, SFMono-Regular, monospace; min-width: 220px; }
+        .np-header { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+        .np-name { font-size: 15px; font-weight: 700; color: #60a5fa; }
+        .np-hex { font-size: 11px; color: #6b7280; }
+        .np-badge { display: inline-block; font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+        .np-badge-ham { background: rgba(251,191,36,0.15); color: #fbbf24; border: 1px solid rgba(251,191,36,0.3); }
+        .np-badge-mqtt { background: rgba(168,85,247,0.15); color: #a855f7; border: 1px solid rgba(168,85,247,0.3); }
+        .np-badge-fav { background: rgba(251,113,133,0.15); color: #fb7185; border: 1px solid rgba(251,113,133,0.3); }
+        .np-section { margin-top: 8px; padding-top: 6px; border-top: 1px solid #1f2937; }
+        .np-section-title { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; color: #4b5563; margin-bottom: 4px; }
+        .np-row { display: flex; justify-content: space-between; align-items: center; font-size: 11px; line-height: 1.6; }
+        .np-label { color: #6b7280; }
+        .np-value { color: #d1d5db; font-weight: 500; }
+        .np-bar { display: inline-block; width: 48px; height: 6px; border-radius: 3px; background: #1f2937; vertical-align: middle; margin-right: 4px; overflow: hidden; }
+        .np-bar-fill { display: block; height: 100%; border-radius: 3px; }
+        /* Map filter overlay */
+        .map-filters {
+            position: absolute; top: 10px; left: 55px; z-index: 1000;
+            width: 244px; background: rgba(17,24,39,0.92);
+            border: 1px solid #374151; border-radius: 0.75rem;
+            backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+            font-family: ui-sans-serif, system-ui, sans-serif;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+        }
+        .mf-search {
+            display: flex; align-items: center; gap: 6px; padding: 8px 10px;
+        }
+        .mf-search input {
+            flex: 1; background: transparent; border: none; outline: none;
+            font-size: 12px; color: #e5e7eb; caret-color: #60a5fa;
+        }
+        .mf-search input::placeholder { color: #4b5563; }
+        .mf-search svg { flex-shrink: 0; color: #4b5563; }
+        .mf-toggle {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 0 10px 8px; cursor: pointer; user-select: none;
+        }
+        .mf-toggle-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; color: #6b7280; }
+        .mf-count { font-size: 10px; color: #4b5563; font-variant-numeric: tabular-nums; }
+        .mf-chevron { transition: transform 0.2s; color: #4b5563; }
+        .mf-chevron.open { transform: rotate(180deg); }
+        .mf-body {
+            border-top: 1px solid #1f2937; padding: 8px 10px;
+            max-height: 340px; overflow-y: auto;
+        }
+        .mf-body::-webkit-scrollbar { width: 4px; }
+        .mf-body::-webkit-scrollbar-thumb { background: #374151; border-radius: 2px; }
+        .mf-group { margin-bottom: 8px; }
+        .mf-group:last-child { margin-bottom: 0; }
+        .mf-group-title { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.6px; color: #4b5563; margin-bottom: 4px; }
+        .mf-option { display: flex; align-items: center; gap: 6px; padding: 2px 0; cursor: pointer; font-size: 11px; color: #d1d5db; }
+        .mf-option input[type="checkbox"], .mf-option input[type="radio"] {
+            accent-color: #60a5fa; width: 12px; height: 12px; margin: 0; cursor: pointer;
+        }
+        .mf-option:hover { color: #f3f4f6; }
+        .mf-reset {
+            display: block; width: 100%; margin-top: 6px; padding: 4px 0;
+            background: transparent; border: 1px solid #374151; border-radius: 6px;
+            font-size: 10px; font-weight: 600; color: #6b7280; cursor: pointer;
+            text-transform: uppercase; letter-spacing: 0.5px; transition: all 0.15s;
+        }
+        .mf-reset:hover { border-color: #4b5563; color: #9ca3af; }
+        .node-marker { display: flex; align-items: center; justify-content: center; }
+        .node-marker-dot {
+            width: 14px; height: 14px; border-radius: 50%;
+            background: #60a5fa; border: 2px solid #1e3a5f;
+            box-shadow: 0 0 8px rgba(96,165,250,0.5);
+        }
+        .node-marker-label {
+            position: absolute; top: -20px; left: 50%; transform: translateX(-50%);
+            white-space: nowrap; font-size: 11px; font-weight: 600; color: #e5e7eb;
+            text-shadow: 0 1px 3px rgba(0,0,0,0.8), 0 0 6px rgba(0,0,0,0.5);
+            pointer-events: none;
+        }
+        /* Heatmap legend */
+        .hm-legend {
+            position: absolute; bottom: 24px; right: 10px; z-index: 1000;
+            background: rgba(17,24,39,0.92); border: 1px solid #374151;
+            border-radius: 0.5rem; padding: 8px 12px;
+            backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+            font-family: ui-sans-serif, system-ui, sans-serif;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+        }
+        .hm-legend-title { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.6px; color: #6b7280; margin-bottom: 4px; }
+        .hm-legend-bar { width: 160px; height: 10px; border-radius: 5px; }
+        .hm-legend-labels { display: flex; justify-content: space-between; font-size: 9px; color: #6b7280; margin-top: 2px; }
+    </style>
 </head>
 <body class="bg-gray-950 text-gray-100 min-h-screen font-sans">
     <div class="max-w-7xl mx-auto px-4 py-6 sm:px-6 lg:px-8">
@@ -23,6 +124,19 @@
                 {{end}}">
                 {{if .Metrics.NodeConnected}}Connected{{else}}Disconnected{{end}}
             </span>
+
+            <!-- Tab Navigation -->
+            <nav class="flex items-center gap-1 ml-4 bg-gray-900 rounded-lg p-0.5 border border-gray-800">
+                <button id="tab-btn-dashboard" onclick="switchTab('dashboard')"
+                    class="tab-btn text-xs font-semibold px-3 py-1 rounded-md transition-colors bg-gray-800 text-gray-100">
+                    Dashboard
+                </button>
+                <button id="tab-btn-map" onclick="switchTab('map')"
+                    class="tab-btn text-xs font-semibold px-3 py-1 rounded-md transition-colors text-gray-400 hover:text-gray-200">
+                    Map
+                </button>
+            </nav>
+
             <div class="ml-auto flex items-center gap-3">
                 <button id="pause-btn"
                     class="text-xs font-semibold px-3 py-1 rounded-lg bg-gray-800 border border-gray-700 text-gray-300 hover:border-indigo-500/50 hover:text-indigo-400 transition-colors"
@@ -31,6 +145,9 @@
                 <span id="sse-label" class="text-xs text-gray-500">Connecting...</span>
             </div>
         </header>
+
+        <!-- ==================== DASHBOARD TAB ==================== -->
+        <div id="tab-dashboard">
 
         <!-- Status Cards -->
         <section class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
@@ -214,11 +331,125 @@
             </div>
         </section>
 
+        </div><!-- end tab-dashboard -->
+
+        <!-- ==================== MAP TAB ==================== -->
+        <div id="tab-map" class="hidden">
+            <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden" style="height: calc(100vh - 140px); position: relative;">
+                <div id="map" style="width: 100%; height: 100%;"></div>
+
+                <!-- Search & Filters overlay -->
+                <div id="map-filters" class="map-filters">
+                    <div class="mf-search">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                        <input id="mf-search-input" type="text" placeholder="Search nodes...">
+                    </div>
+                    <div class="mf-toggle" id="mf-toggle">
+                        <span class="mf-toggle-label">Filters</span>
+                        <span id="mf-node-count" class="mf-count"></span>
+                        <svg class="mf-chevron" id="mf-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                    </div>
+                    <div id="mf-body" class="mf-body" style="display:none;">
+                        <!-- Role filter -->
+                        <div class="mf-group">
+                            <div class="mf-group-title">Role</div>
+                            <div id="mf-roles"></div>
+                        </div>
+                        <!-- Hardware model filter -->
+                        <div class="mf-group">
+                            <div class="mf-group-title">Hardware</div>
+                            <div id="mf-hw"></div>
+                        </div>
+                        <!-- Online status filter -->
+                        <div class="mf-group">
+                            <div class="mf-group-title">Status</div>
+                            <label class="mf-option"><input type="radio" name="mf-status" value="all" checked> All</label>
+                            <label class="mf-option"><input type="radio" name="mf-status" value="online"> Online (&lt;15m)</label>
+                            <label class="mf-option"><input type="radio" name="mf-status" value="offline"> Offline</label>
+                        </div>
+                        <!-- Battery filter -->
+                        <div class="mf-group">
+                            <div class="mf-group-title">Battery</div>
+                            <label class="mf-option"><input type="radio" name="mf-battery" value="all" checked> All</label>
+                            <label class="mf-option"><input type="radio" name="mf-battery" value="low"> Low (&lt;20%)</label>
+                            <label class="mf-option"><input type="radio" name="mf-battery" value="has"> Has battery</label>
+                        </div>
+                        <!-- MQTT filter -->
+                        <div class="mf-group">
+                            <div class="mf-group-title">Source</div>
+                            <label class="mf-option"><input type="radio" name="mf-mqtt" value="all" checked> All</label>
+                            <label class="mf-option"><input type="radio" name="mf-mqtt" value="direct"> Direct only</label>
+                            <label class="mf-option"><input type="radio" name="mf-mqtt" value="mqtt"> MQTT only</label>
+                        </div>
+                        <!-- Heatmap overlay -->
+                        <div class="mf-group">
+                            <div class="mf-group-title">Heatmap</div>
+                            <label class="mf-option"><input type="radio" name="mf-heatmap" value="off" checked> Off</label>
+                            <label class="mf-option"><input type="radio" name="mf-heatmap" value="rssi"> RSSI (dBm)</label>
+                            <label class="mf-option"><input type="radio" name="mf-heatmap" value="snr"> SNR (dB)</label>
+                        </div>
+                        <button id="mf-reset" class="mf-reset">Reset all filters</button>
+                    </div>
+                </div>
+
+                <!-- Heatmap legend -->
+                <div id="hm-legend" class="hm-legend" style="display:none;">
+                    <div id="hm-legend-title" class="hm-legend-title">RSSI</div>
+                    <div id="hm-legend-bar" class="hm-legend-bar"></div>
+                    <div id="hm-legend-labels" class="hm-legend-labels">
+                        <span id="hm-label-low">-120 dBm</span>
+                        <span id="hm-label-high">-40 dBm</span>
+                    </div>
+                </div>
+            </div>
+            <div id="map-no-nodes" class="hidden absolute inset-0 flex items-center justify-center pointer-events-none" style="top: 140px;">
+                <div class="text-center text-gray-500">
+                    <svg class="mx-auto mb-2 w-12 h-12 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/>
+                    </svg>
+                    <p class="text-sm font-medium">No nodes with GPS coordinates</p>
+                    <p class="text-xs mt-1">Positions will appear as nodes report their location</p>
+                </div>
+            </div>
+        </div><!-- end tab-map -->
+
         <!-- Footer -->
         <footer class="mt-8 pt-4 border-t border-gray-800 text-center text-xs text-gray-600">
             Meshtastic TCP Proxy &mdash; real-time via SSE
         </footer>
     </div>
+
+    <!-- Tab switching -->
+    <script>
+        function switchTab(tabName) {
+            // Hide all tabs
+            document.getElementById('tab-dashboard').classList.add('hidden');
+            document.getElementById('tab-map').classList.add('hidden');
+
+            // Deactivate all tab buttons
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.remove('bg-gray-800', 'text-gray-100');
+                btn.classList.add('text-gray-400');
+            });
+
+            // Show selected tab
+            document.getElementById('tab-' + tabName).classList.remove('hidden');
+
+            // Activate selected button
+            const activeBtn = document.getElementById('tab-btn-' + tabName);
+            activeBtn.classList.add('bg-gray-800', 'text-gray-100');
+            activeBtn.classList.remove('text-gray-400');
+
+            // Initialize map on first show
+            if (tabName === 'map') {
+                initMap();
+            }
+        }
+
+        // Default: show dashboard
+        document.getElementById('tab-dashboard').classList.remove('hidden');
+    </script>
 
     <!-- Initial data from server for charts -->
     <script>
@@ -415,6 +646,25 @@
 
             evtSource.addEventListener('node_directory', function(e) {
                 nodeDir = JSON.parse(e.data);
+                updateMapMarkers();
+            });
+
+            evtSource.addEventListener('node_position_update', function(e) {
+                if (paused) return;
+                const pos = JSON.parse(e.data);
+                updateMapNode(pos);
+            });
+
+            evtSource.addEventListener('node_telemetry_update', function(e) {
+                if (paused) return;
+                const tel = JSON.parse(e.data);
+                updateNodeTelemetry(tel);
+            });
+
+            evtSource.addEventListener('node_signal_update', function(e) {
+                if (paused) return;
+                const sig = JSON.parse(e.data);
+                updateNodeSignal(sig);
             });
 
             evtSource.onerror = function() {
@@ -502,6 +752,7 @@
             // Node directory — update from full snapshot
             if (snap.node_dir) {
                 nodeDir = snap.node_dir;
+                updateMapMarkers();
             }
         }
 
@@ -640,6 +891,659 @@
 
         // ── Bootstrap ──
         connectSSE();
+
+        // ── Map (Leaflet) ──
+        let mapInstance = null;
+        let mapMarkers = {};   // nodeNum string → L.marker
+        let mapInitialized = false;
+
+        // Expose initMap globally for tab switching
+        window.initMap = function() {
+            if (mapInitialized) {
+                mapInstance.invalidateSize();
+                return;
+            }
+            mapInitialized = true;
+
+            mapInstance = L.map('map', {
+                center: [0, 0],
+                zoom: 2,
+                zoomControl: true,
+                attributionControl: true,
+            });
+
+            // OpenStreetMap dark-ish tiles (CartoDB Dark Matter)
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
+                subdomains: 'abcd',
+                maxZoom: 19,
+            }).addTo(mapInstance);
+
+            // Populate initial markers from nodeDir
+            updateMapMarkers();
+        }
+
+        function createNodeIcon(shortName) {
+            return L.divIcon({
+                className: 'node-marker',
+                html: '<div class="node-marker-dot"></div>' +
+                      (shortName ? '<div class="node-marker-label">' + esc(shortName) + '</div>' : ''),
+                iconSize: [14, 14],
+                iconAnchor: [7, 7],
+                popupAnchor: [0, -12],
+            });
+        }
+
+        function nodePopupHTML(nodeNum, entry) {
+            const hex = '!' + parseInt(nodeNum).toString(16).padStart(8, '0');
+            let h = '<div class="np">';
+
+            // ── Header: name + hex ID + badges ──
+            h += '<div class="np-header">';
+            if (entry.short_name) {
+                h += '<span class="np-name">' + esc(entry.short_name) + '</span>';
+            }
+            h += '<span class="np-hex">' + esc(hex) + '</span>';
+            if (entry.is_licensed) h += ' <span class="np-badge np-badge-ham">HAM</span>';
+            if (entry.via_mqtt) h += ' <span class="np-badge np-badge-mqtt">MQTT</span>';
+            if (entry.is_favorite) h += ' <span class="np-badge np-badge-fav">FAV</span>';
+            h += '</div>';
+            if (entry.long_name) {
+                h += '<div style="font-size:12px;color:#9ca3af;margin-bottom:2px;">' + esc(entry.long_name) + '</div>';
+            }
+
+            // ── Identity section ──
+            const hasIdentity = entry.hw_model || entry.role || entry.user_id;
+            if (hasIdentity) {
+                h += '<div class="np-section"><div class="np-section-title">Identity</div>';
+                if (entry.user_id) h += npRow('ID', entry.user_id);
+                if (entry.hw_model) h += npRow('Hardware', formatHwModel(entry.hw_model));
+                if (entry.role) h += npRow('Role', formatRole(entry.role));
+                h += '</div>';
+            }
+
+            // ── Radio section ──
+            const hasRadio = entry.snr || entry.rx_rssi || entry.rx_snr || entry.last_heard || entry.hops_away || entry.channel;
+            if (hasRadio) {
+                h += '<div class="np-section"><div class="np-section-title">Radio</div>';
+                if (entry.rx_rssi) h += npRow('RSSI', entry.rx_rssi + ' dBm');
+                if (entry.rx_snr) h += npRow('SNR (live)', entry.rx_snr.toFixed(1) + ' dB');
+                if (entry.snr && !entry.rx_snr) h += npRow('SNR', entry.snr.toFixed(1) + ' dB');
+                if (entry.hops_away !== undefined && entry.hops_away > 0) h += npRow('Hops', entry.hops_away.toString());
+                if (entry.channel) h += npRow('Channel', entry.channel.toString());
+                if (entry.last_heard) h += npRow('Last heard', formatUnixAge(entry.last_heard));
+                h += '</div>';
+            }
+
+            // ── Position section ──
+            const hasPos = entry.latitude || entry.longitude;
+            if (hasPos) {
+                h += '<div class="np-section"><div class="np-section-title">Position</div>';
+                h += npRow('Coords', entry.latitude.toFixed(6) + ', ' + entry.longitude.toFixed(6));
+                if (entry.altitude) h += npRow('Altitude', entry.altitude + ' m');
+                if (entry.ground_speed) h += npRow('Speed', entry.ground_speed + ' m/s');
+                if (entry.ground_track) h += npRow('Heading', entry.ground_track + '&deg;');
+                if (entry.sats_in_view) h += npRow('Satellites', entry.sats_in_view.toString());
+                if (entry.position_time) h += npRow('Fix age', formatUnixAge(entry.position_time));
+                h += '</div>';
+            }
+
+            // ── Device telemetry section ──
+            const hasDev = entry.battery_level || entry.voltage || entry.uptime_seconds || entry.channel_utilization || entry.air_util_tx;
+            if (hasDev) {
+                h += '<div class="np-section"><div class="np-section-title">Device</div>';
+                if (entry.battery_level) {
+                    const pct = Math.min(entry.battery_level, 100);
+                    const color = pct > 50 ? '#34d399' : pct > 20 ? '#fbbf24' : '#f87171';
+                    h += '<div class="np-row"><span class="np-label">Battery</span>'
+                       + '<span class="np-value"><span class="np-bar"><span class="np-bar-fill" style="width:' + pct + '%;background:' + color + '"></span></span>'
+                       + pct + '%</span></div>';
+                }
+                if (entry.voltage) h += npRow('Voltage', entry.voltage.toFixed(2) + ' V');
+                if (entry.uptime_seconds) h += npRow('Uptime', formatUptime(entry.uptime_seconds));
+                if (entry.channel_utilization) h += npRow('Ch. util', entry.channel_utilization.toFixed(1) + '%');
+                if (entry.air_util_tx) h += npRow('Air TX', entry.air_util_tx.toFixed(1) + '%');
+                h += '</div>';
+            }
+
+            // ── Environment section ──
+            const hasEnv = entry.temperature || entry.relative_humidity || entry.barometric_pressure;
+            if (hasEnv) {
+                h += '<div class="np-section"><div class="np-section-title">Environment</div>';
+                if (entry.temperature) h += npRow('Temp', entry.temperature.toFixed(1) + ' &deg;C');
+                if (entry.relative_humidity) h += npRow('Humidity', entry.relative_humidity.toFixed(1) + '%');
+                if (entry.barometric_pressure) h += npRow('Pressure', entry.barometric_pressure.toFixed(1) + ' hPa');
+                h += '</div>';
+            }
+
+            h += '</div>';
+            return h;
+        }
+
+        function npRow(label, value) {
+            return '<div class="np-row"><span class="np-label">' + label + '</span><span class="np-value">' + value + '</span></div>';
+        }
+
+        function formatHwModel(m) {
+            // Convert "HELTEC_V3" → "Heltec V3", "TLORA_V2_1_1P6" → "T-LoRa V2 1.1P6"
+            if (!m) return '';
+            return m.replace(/_/g, ' ').replace(/\w\S*/g, function(t) {
+                return t.charAt(0).toUpperCase() + t.substr(1).toLowerCase();
+            });
+        }
+
+        function formatRole(r) {
+            if (!r) return '';
+            return r.charAt(0).toUpperCase() + r.slice(1).toLowerCase().replace(/_/g, ' ');
+        }
+
+        function formatUnixAge(ts) {
+            if (!ts) return '';
+            const now = Math.floor(Date.now() / 1000);
+            const diff = now - ts;
+            if (diff < 0) return 'just now';
+            if (diff < 60) return diff + 's ago';
+            if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+            if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+            return Math.floor(diff / 86400) + 'd ago';
+        }
+
+        function formatUptime(secs) {
+            if (!secs) return '';
+            const d = Math.floor(secs / 86400);
+            const h = Math.floor((secs % 86400) / 3600);
+            const m = Math.floor((secs % 3600) / 60);
+            if (d > 0) return d + 'd ' + h + 'h';
+            if (h > 0) return h + 'h ' + m + 'm';
+            return m + 'm';
+        }
+
+        window.updateMapMarkers = function() {
+            if (!mapInstance || !nodeDir) return;
+
+            const nodesWithPos = [];
+
+            // Add/update markers
+            for (const [numStr, entry] of Object.entries(nodeDir)) {
+                if (!entry.latitude && !entry.longitude) continue;
+                nodesWithPos.push(numStr);
+
+                if (mapMarkers[numStr]) {
+                    // Update existing marker position and popup
+                    mapMarkers[numStr].setLatLng([entry.latitude, entry.longitude]);
+                    mapMarkers[numStr].setIcon(createNodeIcon(entry.short_name));
+                    mapMarkers[numStr].setPopupContent(nodePopupHTML(numStr, entry));
+                } else {
+                    // Create new marker
+                    const marker = L.marker([entry.latitude, entry.longitude], {
+                        icon: createNodeIcon(entry.short_name),
+                    }).addTo(mapInstance);
+                    marker.bindPopup(nodePopupHTML(numStr, entry), { maxWidth: 300 });
+                    mapMarkers[numStr] = marker;
+                }
+            }
+
+            // Remove markers for nodes no longer in directory
+            for (const numStr of Object.keys(mapMarkers)) {
+                if (!nodeDir[numStr] || (!nodeDir[numStr].latitude && !nodeDir[numStr].longitude)) {
+                    mapMarkers[numStr].remove();
+                    delete mapMarkers[numStr];
+                }
+            }
+
+            // Fit bounds if we have nodes
+            if (nodesWithPos.length > 0) {
+                const bounds = L.latLngBounds(
+                    nodesWithPos.map(n => [nodeDir[n].latitude, nodeDir[n].longitude])
+                );
+                mapInstance.fitBounds(bounds, { padding: [50, 50], maxZoom: 14 });
+                document.getElementById('map-no-nodes').classList.add('hidden');
+            } else {
+                document.getElementById('map-no-nodes').classList.remove('hidden');
+            }
+
+            // Rebuild dynamic filter options and apply filters
+            rebuildFilterOptions();
+            applyMapFilters();
+            updateHeatmap();
+        }
+
+        window.updateMapNode = function(pos) {
+            if (!nodeDir) return;
+
+            // Update nodeDir with new position (including extended fields)
+            const numStr = pos.node_num.toString();
+            if (nodeDir[numStr]) {
+                nodeDir[numStr].latitude = pos.latitude;
+                nodeDir[numStr].longitude = pos.longitude;
+                nodeDir[numStr].altitude = pos.altitude;
+                if (pos.ground_speed) nodeDir[numStr].ground_speed = pos.ground_speed;
+                if (pos.ground_track) nodeDir[numStr].ground_track = pos.ground_track;
+                if (pos.sats_in_view) nodeDir[numStr].sats_in_view = pos.sats_in_view;
+                if (pos.position_time) nodeDir[numStr].position_time = pos.position_time;
+            } else {
+                nodeDir[numStr] = {
+                    short_name: pos.short_name,
+                    long_name: pos.long_name,
+                    latitude: pos.latitude,
+                    longitude: pos.longitude,
+                    altitude: pos.altitude,
+                    ground_speed: pos.ground_speed || 0,
+                    ground_track: pos.ground_track || 0,
+                    sats_in_view: pos.sats_in_view || 0,
+                    position_time: pos.position_time || 0,
+                };
+            }
+
+            // Update map marker if map is initialized
+            if (!mapInstance) return;
+
+            const entry = nodeDir[numStr];
+            if (mapMarkers[numStr]) {
+                mapMarkers[numStr].setLatLng([pos.latitude, pos.longitude]);
+                mapMarkers[numStr].setIcon(createNodeIcon(entry.short_name));
+                mapMarkers[numStr].setPopupContent(nodePopupHTML(numStr, entry));
+            } else {
+                const marker = L.marker([pos.latitude, pos.longitude], {
+                    icon: createNodeIcon(entry.short_name),
+                }).addTo(mapInstance);
+                marker.bindPopup(nodePopupHTML(numStr, entry), { maxWidth: 300 });
+                mapMarkers[numStr] = marker;
+                document.getElementById('map-no-nodes').classList.add('hidden');
+            }
+
+            // Apply filters to new/updated marker
+            applyMapFilters();
+            updateHeatmap();
+        }
+
+        // Update node telemetry data and refresh popup if open
+        window.updateNodeTelemetry = function(tel) {
+            if (!nodeDir) return;
+
+            const numStr = tel.node_num.toString();
+            if (!nodeDir[numStr]) {
+                nodeDir[numStr] = { short_name: tel.short_name, long_name: tel.long_name };
+            }
+            const entry = nodeDir[numStr];
+
+            // Device metrics
+            if (tel.battery_level) entry.battery_level = tel.battery_level;
+            if (tel.voltage) entry.voltage = tel.voltage;
+            if (tel.channel_utilization) entry.channel_utilization = tel.channel_utilization;
+            if (tel.air_util_tx) entry.air_util_tx = tel.air_util_tx;
+            if (tel.uptime_seconds) entry.uptime_seconds = tel.uptime_seconds;
+
+            // Environment metrics
+            if (tel.temperature) entry.temperature = tel.temperature;
+            if (tel.relative_humidity) entry.relative_humidity = tel.relative_humidity;
+            if (tel.barometric_pressure) entry.barometric_pressure = tel.barometric_pressure;
+
+            // Refresh popup if this node's popup is open
+            if (mapInstance && mapMarkers[numStr] && mapMarkers[numStr].isPopupOpen()) {
+                mapMarkers[numStr].setPopupContent(nodePopupHTML(numStr, entry));
+            }
+
+            // Re-apply filters (battery/telemetry data may have changed)
+            applyMapFilters();
+        }
+
+        // ══════════════════════════════════════════════
+        // ── Node Signal Updates ──
+        // ══════════════════════════════════════════════
+
+        window.updateNodeSignal = function(sig) {
+            if (!nodeDir) return;
+
+            const numStr = sig.node_num.toString();
+            if (!nodeDir[numStr]) {
+                nodeDir[numStr] = { short_name: sig.short_name, long_name: sig.long_name };
+            }
+            const entry = nodeDir[numStr];
+
+            if (sig.rx_rssi) entry.rx_rssi = sig.rx_rssi;
+            if (sig.rx_snr) entry.rx_snr = sig.rx_snr;
+
+            // Refresh popup if this node's popup is open
+            if (mapInstance && mapMarkers[numStr] && mapMarkers[numStr].isPopupOpen()) {
+                mapMarkers[numStr].setPopupContent(nodePopupHTML(numStr, entry));
+            }
+
+            // Update heatmap if active
+            updateHeatmap();
+        }
+
+        // ══════════════════════════════════════════════
+        // ── Heatmap Layer ──
+        // ══════════════════════════════════════════════
+
+        let heatmapLayer = null;
+        let heatmapMode = 'off'; // 'off', 'rssi', 'snr'
+
+        // RSSI gradient: blue (weak) → yellow → red (strong / closer to 0)
+        const rssiGradient = {
+            0.0: '#1e3a5f',
+            0.25: '#2563eb',
+            0.5: '#22d3ee',
+            0.75: '#fbbf24',
+            1.0: '#ef4444',
+        };
+
+        // SNR gradient: red (low/negative) → yellow → green (high/positive)
+        const snrGradient = {
+            0.0: '#1e3a5f',
+            0.25: '#ef4444',
+            0.5: '#fbbf24',
+            0.75: '#34d399',
+            1.0: '#10b981',
+        };
+
+        function getHeatmapPoints(mode) {
+            if (!nodeDir) return [];
+            const points = [];
+            for (const [numStr, entry] of Object.entries(nodeDir)) {
+                if (!entry.latitude && !entry.longitude) continue;
+
+                let intensity;
+                if (mode === 'rssi') {
+                    // RSSI ranges from ~ -120 (weakest) to ~ -40 (strongest)
+                    // Use rx_rssi (live per-packet) with fallback to 0
+                    const rssi = entry.rx_rssi;
+                    if (!rssi) continue;
+                    // Normalize: -120 → 0.0, -40 → 1.0
+                    intensity = Math.max(0, Math.min(1, (rssi + 120) / 80));
+                } else if (mode === 'snr') {
+                    // SNR ranges from ~ -20 (worst) to ~ +15 (best)
+                    // Use rx_snr (live) if available, fallback to snr (from config cache)
+                    const snr = entry.rx_snr || entry.snr;
+                    if (!snr && snr !== 0) continue;
+                    // Normalize: -20 → 0.0, +15 → 1.0
+                    intensity = Math.max(0, Math.min(1, (snr + 20) / 35));
+                } else {
+                    continue;
+                }
+
+                points.push([entry.latitude, entry.longitude, intensity]);
+            }
+            return points;
+        }
+
+        function updateHeatmap() {
+            if (!mapInstance) return;
+
+            if (heatmapMode === 'off') {
+                if (heatmapLayer) {
+                    mapInstance.removeLayer(heatmapLayer);
+                    heatmapLayer = null;
+                }
+                document.getElementById('hm-legend').style.display = 'none';
+                return;
+            }
+
+            const points = getHeatmapPoints(heatmapMode);
+            const gradient = heatmapMode === 'rssi' ? rssiGradient : snrGradient;
+            const opts = {
+                radius: 40,
+                blur: 25,
+                maxZoom: 17,
+                max: 1.0,
+                minOpacity: 0.15,
+                gradient: gradient,
+            };
+
+            if (heatmapLayer) {
+                heatmapLayer.setLatLngs(points);
+                heatmapLayer.setOptions(opts);
+            } else {
+                heatmapLayer = L.heatLayer(points, opts).addTo(mapInstance);
+            }
+
+            // Update legend
+            const legend = document.getElementById('hm-legend');
+            legend.style.display = '';
+            L.DomEvent.disableClickPropagation(legend);
+            L.DomEvent.disableScrollPropagation(legend);
+
+            const gradCSS = heatmapMode === 'rssi'
+                ? 'linear-gradient(to right, #1e3a5f, #2563eb, #22d3ee, #fbbf24, #ef4444)'
+                : 'linear-gradient(to right, #1e3a5f, #ef4444, #fbbf24, #34d399, #10b981)';
+            document.getElementById('hm-legend-bar').style.background = gradCSS;
+
+            if (heatmapMode === 'rssi') {
+                document.getElementById('hm-legend-title').textContent = 'RSSI';
+                document.getElementById('hm-label-low').textContent = '-120 dBm';
+                document.getElementById('hm-label-high').textContent = '-40 dBm';
+            } else {
+                document.getElementById('hm-legend-title').textContent = 'SNR';
+                document.getElementById('hm-label-low').textContent = '-20 dB';
+                document.getElementById('hm-label-high').textContent = '+15 dB';
+            }
+        }
+
+        // ══════════════════════════════════════════════
+        // ── Map Search & Filters ──
+        // ══════════════════════════════════════════════
+
+        let filtersOpen = false;
+        const mfBody = document.getElementById('mf-body');
+        const mfChevron = document.getElementById('mf-chevron');
+        const mfSearchInput = document.getElementById('mf-search-input');
+        const mfNodeCount = document.getElementById('mf-node-count');
+
+        // Toggle filter panel
+        document.getElementById('mf-toggle').addEventListener('click', function() {
+            filtersOpen = !filtersOpen;
+            mfBody.style.display = filtersOpen ? '' : 'none';
+            mfChevron.classList.toggle('open', filtersOpen);
+        });
+
+        // Prevent map interaction when interacting with the filter panel
+        (function() {
+            const panel = document.getElementById('map-filters');
+            if (panel) {
+                L.DomEvent.disableClickPropagation(panel);
+                L.DomEvent.disableScrollPropagation(panel);
+            }
+        })();
+
+        // State: which roles/hw are checked (null = not yet built, means "all")
+        let checkedRoles = null;  // Set<string> or null
+        let checkedHw = null;     // Set<string> or null
+
+        // Build dynamic checkbox lists from nodeDir
+        function rebuildFilterOptions() {
+            if (!nodeDir) return;
+            const roles = new Set();
+            const hws = new Set();
+            for (const entry of Object.values(nodeDir)) {
+                if (entry.role) roles.add(entry.role);
+                if (entry.hw_model) hws.add(entry.hw_model);
+            }
+            rebuildCheckboxGroup('mf-roles', 'mf-role', roles, checkedRoles);
+            rebuildCheckboxGroup('mf-hw', 'mf-hwm', hws, checkedHw);
+        }
+
+        function rebuildCheckboxGroup(containerId, namePrefix, values, checkedSet) {
+            const container = document.getElementById(containerId);
+            if (!container) return;
+            const sorted = Array.from(values).sort();
+            // Preserve existing checked state
+            const existing = {};
+            container.querySelectorAll('input[type="checkbox"]').forEach(function(cb) {
+                existing[cb.value] = cb.checked;
+            });
+            let html = '';
+            for (const val of sorted) {
+                // If checkedSet exists, use it; else if existed before, preserve; else default checked
+                let isChecked;
+                if (checkedSet !== null) {
+                    isChecked = checkedSet.has(val);
+                } else if (val in existing) {
+                    isChecked = existing[val];
+                } else {
+                    isChecked = true;
+                }
+                const label = namePrefix === 'mf-role' ? formatRole(val) : formatHwModel(val);
+                html += '<label class="mf-option"><input type="checkbox" name="' + namePrefix + '" value="' + esc(val) + '"'
+                     + (isChecked ? ' checked' : '') + '> ' + esc(label) + '</label>';
+            }
+            if (sorted.length === 0) {
+                html = '<span style="font-size:10px;color:#4b5563;">No data</span>';
+            }
+            container.innerHTML = html;
+            // Attach listeners
+            container.querySelectorAll('input[type="checkbox"]').forEach(function(cb) {
+                cb.addEventListener('change', function() { syncCheckedState(); applyMapFilters(); });
+            });
+        }
+
+        // Read current checkbox state into checkedRoles / checkedHw
+        function syncCheckedState() {
+            checkedRoles = new Set();
+            document.querySelectorAll('input[name="mf-role"]:checked').forEach(function(cb) {
+                checkedRoles.add(cb.value);
+            });
+            checkedHw = new Set();
+            document.querySelectorAll('input[name="mf-hwm"]:checked').forEach(function(cb) {
+                checkedHw.add(cb.value);
+            });
+        }
+
+        // Read radio filter values
+        function getRadioValue(name) {
+            const el = document.querySelector('input[name="' + name + '"]:checked');
+            return el ? el.value : 'all';
+        }
+
+        // ── Core filter logic ──
+        function nodePassesFilters(numStr, entry) {
+            // Text search
+            const q = mfSearchInput.value.toLowerCase().trim();
+            if (q) {
+                const hex = '!' + parseInt(numStr).toString(16).padStart(8, '0');
+                const haystack = ((entry.short_name || '') + ' ' + (entry.long_name || '') + ' ' + hex + ' ' + (entry.user_id || '')).toLowerCase();
+                if (!haystack.includes(q)) return false;
+            }
+
+            // Role filter
+            if (checkedRoles !== null && checkedRoles.size > 0) {
+                const role = entry.role || '';
+                // If node has no role, only show if no roles are unchecked (i.e. all checked)
+                if (role && !checkedRoles.has(role)) return false;
+                // Count total available roles
+                const totalRoles = document.querySelectorAll('input[name="mf-role"]').length;
+                if (!role && checkedRoles.size < totalRoles) return false;
+            }
+
+            // Hardware model filter
+            if (checkedHw !== null && checkedHw.size > 0) {
+                const hw = entry.hw_model || '';
+                if (hw && !checkedHw.has(hw)) return false;
+                const totalHw = document.querySelectorAll('input[name="mf-hwm"]').length;
+                if (!hw && checkedHw.size < totalHw) return false;
+            }
+
+            // Status filter
+            const status = getRadioValue('mf-status');
+            if (status !== 'all' && entry.last_heard) {
+                const now = Math.floor(Date.now() / 1000);
+                const age = now - entry.last_heard;
+                const online = age < 900; // 15 minutes
+                if (status === 'online' && !online) return false;
+                if (status === 'offline' && online) return false;
+            }
+            // If no last_heard data: "online" filter hides them, "offline" shows them, "all" shows them
+            if (status === 'online' && !entry.last_heard) return false;
+
+            // Battery filter
+            const battery = getRadioValue('mf-battery');
+            if (battery === 'low') {
+                if (!entry.battery_level || entry.battery_level >= 20) return false;
+            } else if (battery === 'has') {
+                if (!entry.battery_level) return false;
+            }
+
+            // MQTT filter
+            const mqtt = getRadioValue('mf-mqtt');
+            if (mqtt === 'direct' && entry.via_mqtt) return false;
+            if (mqtt === 'mqtt' && !entry.via_mqtt) return false;
+
+            return true;
+        }
+
+        function applyMapFilters() {
+            if (!mapInstance || !nodeDir) return;
+
+            let visible = 0;
+            let total = 0;
+            let singleMatch = null;
+
+            for (const [numStr, entry] of Object.entries(nodeDir)) {
+                if (!entry.latitude && !entry.longitude) continue;
+                total++;
+
+                const passes = nodePassesFilters(numStr, entry);
+                if (passes) {
+                    visible++;
+                    singleMatch = numStr;
+                    // Show marker
+                    if (mapMarkers[numStr]) {
+                        if (!mapInstance.hasLayer(mapMarkers[numStr])) {
+                            mapMarkers[numStr].addTo(mapInstance);
+                        }
+                    }
+                } else {
+                    // Hide marker
+                    if (mapMarkers[numStr] && mapInstance.hasLayer(mapMarkers[numStr])) {
+                        mapMarkers[numStr].remove();
+                    }
+                }
+            }
+
+            // Update counter
+            mfNodeCount.textContent = visible + ' / ' + total;
+
+            // If exactly one match from text search, fly to it and open popup
+            const q = mfSearchInput.value.trim();
+            if (q && visible === 1 && singleMatch && mapMarkers[singleMatch]) {
+                const entry = nodeDir[singleMatch];
+                mapInstance.flyTo([entry.latitude, entry.longitude], 14, { duration: 0.5 });
+                mapMarkers[singleMatch].openPopup();
+            }
+        }
+
+        window.applyMapFilters = applyMapFilters;
+
+        // ── Event listeners for filters ──
+        mfSearchInput.addEventListener('input', applyMapFilters);
+
+        // Radio buttons
+        document.querySelectorAll('input[name="mf-status"], input[name="mf-battery"], input[name="mf-mqtt"]').forEach(function(el) {
+            el.addEventListener('change', applyMapFilters);
+        });
+
+        // Heatmap radio buttons
+        document.querySelectorAll('input[name="mf-heatmap"]').forEach(function(el) {
+            el.addEventListener('change', function() {
+                heatmapMode = getRadioValue('mf-heatmap');
+                updateHeatmap();
+            });
+        });
+
+        // Reset button
+        document.getElementById('mf-reset').addEventListener('click', function() {
+            mfSearchInput.value = '';
+            document.querySelectorAll('#mf-body input[type="radio"][value="all"]').forEach(function(r) { r.checked = true; });
+            document.querySelectorAll('#mf-body input[type="checkbox"]').forEach(function(cb) { cb.checked = true; });
+            // Reset heatmap to off
+            const hmOff = document.querySelector('input[name="mf-heatmap"][value="off"]');
+            if (hmOff) hmOff.checked = true;
+            heatmapMode = 'off';
+            checkedRoles = null;
+            checkedHw = null;
+            applyMapFilters();
+            updateHeatmap();
+        });
     })();
     </script>
 </body>

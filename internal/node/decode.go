@@ -14,6 +14,154 @@ import (
 // Protobuf decoding helpers
 // ---------------------------------------------------------------------------
 
+// NodePosition holds structured position data extracted from a POSITION_APP packet.
+type NodePosition struct {
+	NodeNum      uint32
+	Latitude     float64
+	Longitude    float64
+	Altitude     int32
+	GroundSpeed  uint32
+	GroundTrack  uint32
+	SatsInView   uint32
+	PositionTime uint32 // unix timestamp of position fix
+}
+
+// ExtractPosition tries to extract a structured position update from a
+// FromRadio payload containing a decoded MeshPacket with PortNum_POSITION_APP.
+// Returns nil if the payload is not a position update or has zero coordinates.
+func ExtractPosition(payload []byte) *NodePosition {
+	msg := &pb.FromRadio{}
+	if err := proto.Unmarshal(payload, msg); err != nil {
+		return nil
+	}
+	pkt, ok := msg.GetPayloadVariant().(*pb.FromRadio_Packet)
+	if !ok || pkt.Packet == nil {
+		return nil
+	}
+	decoded, ok := pkt.Packet.GetPayloadVariant().(*pb.MeshPacket_Decoded)
+	if !ok || decoded.Decoded == nil {
+		return nil
+	}
+	if decoded.Decoded.GetPortnum() != pb.PortNum_POSITION_APP {
+		return nil
+	}
+	pos := &pb.Position{}
+	if err := proto.Unmarshal(decoded.Decoded.GetPayload(), pos); err != nil {
+		return nil
+	}
+	lat := float64(pos.GetLatitudeI()) / 1e7
+	lon := float64(pos.GetLongitudeI()) / 1e7
+	if lat == 0 && lon == 0 {
+		return nil
+	}
+	return &NodePosition{
+		NodeNum:      pkt.Packet.GetFrom(),
+		Latitude:     lat,
+		Longitude:    lon,
+		Altitude:     pos.GetAltitude(),
+		GroundSpeed:  pos.GetGroundSpeed(),
+		GroundTrack:  pos.GetGroundTrack(),
+		SatsInView:   pos.GetSatsInView(),
+		PositionTime: pos.GetTime(),
+	}
+}
+
+// NodeTelemetry holds structured telemetry data extracted from a TELEMETRY_APP packet.
+type NodeTelemetry struct {
+	NodeNum            uint32
+	BatteryLevel       uint32
+	Voltage            float32
+	ChannelUtilization float32
+	AirUtilTx          float32
+	UptimeSeconds      uint32
+	Temperature        float32
+	RelativeHumidity   float32
+	BarometricPressure float32
+}
+
+// NodeSignal holds per-packet signal quality extracted from a MeshPacket.
+type NodeSignal struct {
+	NodeNum uint32
+	RxRssi  int32
+	RxSnr   float32
+}
+
+// ExtractSignal tries to extract signal quality (RSSI/SNR) from a FromRadio
+// payload containing a decoded MeshPacket. Returns nil if the payload is not
+// a MeshPacket, has no From node, or has zero RxRssi.
+func ExtractSignal(payload []byte) *NodeSignal {
+	msg := &pb.FromRadio{}
+	if err := proto.Unmarshal(payload, msg); err != nil {
+		return nil
+	}
+	pkt, ok := msg.GetPayloadVariant().(*pb.FromRadio_Packet)
+	if !ok || pkt.Packet == nil {
+		return nil
+	}
+	from := pkt.Packet.GetFrom()
+	rssi := pkt.Packet.GetRxRssi()
+	snr := pkt.Packet.GetRxSnr()
+	if from == 0 || rssi == 0 {
+		return nil
+	}
+	return &NodeSignal{
+		NodeNum: from,
+		RxRssi:  rssi,
+		RxSnr:   snr,
+	}
+}
+
+// ExtractTelemetry tries to extract structured telemetry from a FromRadio
+// payload containing a decoded MeshPacket with PortNum_TELEMETRY_APP.
+// Returns nil if the payload is not a telemetry update or cannot be decoded.
+func ExtractTelemetry(payload []byte) *NodeTelemetry {
+	msg := &pb.FromRadio{}
+	if err := proto.Unmarshal(payload, msg); err != nil {
+		return nil
+	}
+	pkt, ok := msg.GetPayloadVariant().(*pb.FromRadio_Packet)
+	if !ok || pkt.Packet == nil {
+		return nil
+	}
+	decoded, ok := pkt.Packet.GetPayloadVariant().(*pb.MeshPacket_Decoded)
+	if !ok || decoded.Decoded == nil {
+		return nil
+	}
+	if decoded.Decoded.GetPortnum() != pb.PortNum_TELEMETRY_APP {
+		return nil
+	}
+	tel := &pb.Telemetry{}
+	if err := proto.Unmarshal(decoded.Decoded.GetPayload(), tel); err != nil {
+		return nil
+	}
+
+	result := &NodeTelemetry{
+		NodeNum: pkt.Packet.GetFrom(),
+	}
+
+	switch v := tel.GetVariant().(type) {
+	case *pb.Telemetry_DeviceMetrics:
+		if dm := v.DeviceMetrics; dm != nil {
+			result.BatteryLevel = dm.GetBatteryLevel()
+			result.Voltage = dm.GetVoltage()
+			result.ChannelUtilization = dm.GetChannelUtilization()
+			result.AirUtilTx = dm.GetAirUtilTx()
+			result.UptimeSeconds = dm.GetUptimeSeconds()
+		}
+	case *pb.Telemetry_EnvironmentMetrics:
+		if em := v.EnvironmentMetrics; em != nil {
+			result.Temperature = em.GetTemperature()
+			result.RelativeHumidity = em.GetRelativeHumidity()
+			result.BarometricPressure = em.GetBarometricPressure()
+		}
+	default:
+		// PowerMetrics and other telemetry types are not stored in NodeEntry
+		return nil
+	}
+
+	return result
+}
+
 // decodeFromRadio fully decodes a FromRadio protobuf payload into a MessageRecord.
 func decodeFromRadio(payload []byte) metrics.MessageRecord {
 	rec := metrics.MessageRecord{
@@ -428,7 +576,7 @@ func copyBytes(b []byte) []byte {
 }
 
 // ExtractNodeDirectory parses NodeInfo frames from the config cache and
-// returns a map of node number → NodeEntry for name resolution.
+// returns a map of node number → NodeEntry with all available fields.
 func ExtractNodeDirectory(frames [][]byte) map[uint32]metrics.NodeEntry {
 	dir := make(map[uint32]metrics.NodeEntry)
 	for _, frame := range frames {
@@ -448,10 +596,47 @@ func ExtractNodeDirectory(frames [][]byte) map[uint32]metrics.NodeEntry {
 		if u == nil {
 			continue
 		}
-		dir[num] = metrics.NodeEntry{
-			ShortName: u.GetShortName(),
-			LongName:  u.GetLongName(),
+		entry := metrics.NodeEntry{
+			ShortName:  u.GetShortName(),
+			LongName:   u.GetLongName(),
+			UserID:     u.GetId(),
+			HwModel:    u.GetHwModel().String(),
+			Role:       u.GetRole().String(),
+			IsLicensed: u.GetIsLicensed(),
+
+			Snr:        ni.NodeInfo.GetSnr(),
+			LastHeard:  ni.NodeInfo.GetLastHeard(),
+			HopsAway:   ni.NodeInfo.GetHopsAway(),
+			ViaMqtt:    ni.NodeInfo.GetViaMqtt(),
+			IsFavorite: ni.NodeInfo.GetIsFavorite(),
+			Channel:    ni.NodeInfo.GetChannel(),
 		}
+
+		// Position from NodeInfo
+		if pos := ni.NodeInfo.GetPosition(); pos != nil {
+			lat := float64(pos.GetLatitudeI()) / 1e7
+			lon := float64(pos.GetLongitudeI()) / 1e7
+			if lat != 0 || lon != 0 {
+				entry.Latitude = lat
+				entry.Longitude = lon
+				entry.Altitude = pos.GetAltitude()
+				entry.SatsInView = pos.GetSatsInView()
+				entry.GroundSpeed = pos.GetGroundSpeed()
+				entry.GroundTrack = pos.GetGroundTrack()
+				entry.PositionTime = pos.GetTime()
+			}
+		}
+
+		// Device metrics from NodeInfo (populated by firmware)
+		if dm := ni.NodeInfo.GetDeviceMetrics(); dm != nil {
+			entry.BatteryLevel = dm.GetBatteryLevel()
+			entry.Voltage = dm.GetVoltage()
+			entry.ChannelUtilization = dm.GetChannelUtilization()
+			entry.AirUtilTx = dm.GetAirUtilTx()
+			entry.UptimeSeconds = dm.GetUptimeSeconds()
+		}
+
+		dir[num] = entry
 	}
 	return dir
 }

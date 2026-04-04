@@ -249,6 +249,44 @@ func (c *Connection) readLoop(ctx context.Context, conn net.Conn) error {
 		rec := decodeFromRadio(payload)
 		c.metrics.RecordMessage(rec)
 
+		// Update node position from POSITION_APP packets in real time
+		if pos := ExtractPosition(payload); pos != nil {
+			c.metrics.UpdateNodePosition(metrics.PositionUpdate{
+				NodeNum:      pos.NodeNum,
+				Latitude:     pos.Latitude,
+				Longitude:    pos.Longitude,
+				Altitude:     pos.Altitude,
+				GroundSpeed:  pos.GroundSpeed,
+				GroundTrack:  pos.GroundTrack,
+				SatsInView:   pos.SatsInView,
+				PositionTime: pos.PositionTime,
+			})
+		}
+
+		// Update node telemetry from TELEMETRY_APP packets in real time
+		if tel := ExtractTelemetry(payload); tel != nil {
+			c.metrics.UpdateNodeTelemetry(metrics.TelemetryUpdate{
+				NodeNum:            tel.NodeNum,
+				BatteryLevel:       tel.BatteryLevel,
+				Voltage:            tel.Voltage,
+				ChannelUtilization: tel.ChannelUtilization,
+				AirUtilTx:          tel.AirUtilTx,
+				UptimeSeconds:      tel.UptimeSeconds,
+				Temperature:        tel.Temperature,
+				RelativeHumidity:   tel.RelativeHumidity,
+				BarometricPressure: tel.BarometricPressure,
+			})
+		}
+
+		// Update node signal quality from MeshPacket RxRssi/RxSnr in real time
+		if sig := ExtractSignal(payload); sig != nil {
+			c.metrics.UpdateNodeSignal(metrics.SignalUpdate{
+				NodeNum: sig.NodeNum,
+				RxRssi:  sig.RxRssi,
+				RxSnr:   sig.RxSnr,
+			})
+		}
+
 		// Config caching logic
 		switch rec.Type {
 		case "my_info":
