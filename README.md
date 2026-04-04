@@ -11,6 +11,8 @@ A TCP proxy for [Meshtastic](https://meshtastic.org/) LoRa mesh radio nodes. Con
 - **iOS two-phase config** — supports special firmware nonces (`69420`/`69421`) used by the iOS Meshtastic app for split config + node database loading
 - **mDNS advertisement** — advertises as `_meshtastic._tcp` so Meshtastic apps auto-discover the proxy on the local network
 - **Web dashboard** — real-time traffic graphs, message types breakdown, connected clients list, and recent message log via SSE
+- **Prometheus metrics** — `/metrics` endpoint exposing proxy traffic, connection reliability, mesh node counts, and message breakdowns by port type, plus Go runtime and process metrics
+- **Grafana dashboard** — pre-built JSON dashboard with overview stats, traffic rates, message type distribution, connection reliability, and Go runtime panels
 - **Kubernetes-ready** — manifests for `hostNetwork` deployment with mDNS on bare-metal clusters
 
 ## Architecture
@@ -27,8 +29,8 @@ Meshtastic Node (TCP :4403)
         │
    Other components:
    ├── discovery.Advertiser  ← mDNS (_meshtastic._tcp), multi-interface support
-   ├── web.Server            ← HTTP dashboard + SSE + metrics API
-   └── metrics.Metrics       ← counters, ring buffers, pub/sub for SSE
+   ├── web.Server            ← HTTP dashboard + SSE + Prometheus /metrics
+   └── metrics.Metrics       ← counters, ring buffers, pub/sub, Prometheus collector
 ```
 
 ## Quick Start
@@ -75,6 +77,42 @@ kubectl apply -f deploy/kubernetes/service.yaml
 | `configmap.yaml` | ConfigMap | TOML config |
 | `deployment.yaml` | Deployment | Pod with hostNetwork, HTTP health probes on web port |
 | `service.yaml` | Service (LoadBalancer) | Exposes web dashboard via MetalLB |
+
+## Monitoring
+
+### Prometheus Metrics
+
+The proxy exposes a `/metrics` endpoint on the web server port (default `:8080`) with the following metrics:
+
+| Metric | Type | Description |
+|---|---|---|
+| `meshtastic_proxy_info` | Gauge | Proxy instance info (label: `node_address`) |
+| `meshtastic_proxy_uptime_seconds` | Gauge | Seconds since proxy started |
+| `meshtastic_proxy_node_connected` | Gauge | Node TCP connection status (1=up, 0=down) |
+| `meshtastic_proxy_active_clients` | Gauge | Currently connected proxy clients |
+| `meshtastic_proxy_bytes_from_node_total` | Counter | Bytes received from node |
+| `meshtastic_proxy_bytes_to_node_total` | Counter | Bytes sent to node |
+| `meshtastic_proxy_frames_from_node_total` | Counter | Frames received from node |
+| `meshtastic_proxy_frames_to_node_total` | Counter | Frames sent to node |
+| `meshtastic_proxy_node_reconnects_total` | Counter | Node reconnection count |
+| `meshtastic_proxy_node_connection_errors_total` | Counter | Node connection error count |
+| `meshtastic_proxy_config_cache_frames` | Gauge | Frames held in config cache |
+| `meshtastic_proxy_config_cache_age_seconds` | Gauge | Seconds since cache was last populated |
+| `meshtastic_proxy_config_replays_total` | Counter | Config replays by type (`full`, `config_only`, `nodes_only`) |
+| `meshtastic_proxy_messages_total` | Counter | Messages by `port_num` (e.g. `POSITION_APP`, `TEXT_MESSAGE_APP`) |
+| `meshtastic_proxy_mesh_nodes` | Gauge | Known nodes in the mesh network |
+
+Standard `go_*` and `process_*` metrics are also included.
+
+### Grafana Dashboard
+
+A pre-built Grafana dashboard is provided at [`deploy/grafana/grafana-dashboard.json`](deploy/grafana/grafana-dashboard.json). Import it into Grafana manually or provision it via your preferred method (file provisioning, API, Grafana sidecar, etc.). The dashboard includes:
+
+- **Overview** — node status, uptime, active clients, mesh nodes, config cache stats
+- **Traffic** — frame rate, byte rate, and cumulative traffic (bidirectional)
+- **Messages** — donut chart by port type, stacked message rate over time, total count
+- **Connection Reliability** — reconnect rate, error rate, config replay rate
+- **Go Runtime** (collapsed) — goroutines, memory, GC duration, CPU usage
 
 ## Configuration
 
@@ -160,9 +198,11 @@ internal/
 ├── proxy/               Client hub, broadcast, cached config replay
 ├── protocol/            Binary frame encoding (magic + length + protobuf)
 ├── discovery/           mDNS advertisement (hashicorp/mdns)
-├── metrics/             Runtime stats, traffic time-series, SSE pub/sub
-└── web/                 HTTP server, dashboard, SSE endpoint
-deploy/kubernetes/       Namespace, ConfigMap, Deployment, Service manifests
+├── metrics/             Runtime stats, traffic time-series, SSE pub/sub, Prometheus collector
+└── web/                 HTTP server, dashboard, SSE endpoint, /metrics
+deploy/
+├── grafana/             Grafana dashboard JSON
+└── kubernetes/          Namespace, ConfigMap, Deployment, Service manifests
 ```
 
 ### Testing
