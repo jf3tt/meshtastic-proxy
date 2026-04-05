@@ -19,6 +19,16 @@ footer = ""
 [git]
 conventional_commits = true
 filter_unconventional = true
+split_commits = true
+# Remove body lines that are not conventional commit headers (e.g. bullet
+# points, blank lines). split_commits splits on "\n---\n", and each fragment
+# is parsed independently. Without this, bullet-point body lines would be
+# split into separate "commits" and either duplicated or cause parse errors.
+commit_preprocessors = [
+  { pattern = "\n- .*", replace = "" },
+  { pattern = "\n  .*", replace = "" },
+  { pattern = "\n\\*.*", replace = "" },
+]
 commit_parsers = [
   { message = "^feat", group = "Features" },
   { message = "^fix", group = "Bug Fixes" },
