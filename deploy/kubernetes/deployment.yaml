@@ -25,9 +25,9 @@ spec:
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
 
-      # Uncomment to pin the proxy to a specific node:
-      # nodeSelector:
-      #   kubernetes.io/hostname: my-node
+      # Pin to the worker node with the USB-Ethernet adapter (LAN + mDNS).
+      nodeSelector:
+        kubernetes.io/hostname: talos-worker-01
 
       containers:
         - name: meshtastic-proxy
