@@ -37,6 +37,38 @@
         .np-value { color: #d1d5db; font-weight: 500; }
         .np-bar { display: inline-block; width: 48px; height: 6px; border-radius: 3px; background: #1f2937; vertical-align: middle; margin-right: 4px; overflow: hidden; }
         .np-bar-fill { display: block; height: 100%; border-radius: 3px; }
+        .np-trace-btn {
+            display: inline-flex; align-items: center; justify-content: center;
+            padding: 5px 14px; margin-top: 2px;
+            background: rgba(6,182,212,0.12); color: #06b6d4;
+            border: 1px solid rgba(6,182,212,0.3); border-radius: 6px;
+            font-size: 11px; font-weight: 600; cursor: pointer;
+            transition: all 0.15s; letter-spacing: 0.3px;
+        }
+        .np-trace-btn:hover { background: rgba(6,182,212,0.22); border-color: rgba(6,182,212,0.5); }
+        .np-trace-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .np-trace-btn .spinner {
+            display: inline-block; width: 12px; height: 12px; margin-right: 4px;
+            border: 2px solid rgba(6,182,212,0.3); border-top-color: #06b6d4;
+            border-radius: 50%; animation: np-spin 0.6s linear infinite;
+        }
+        @keyframes np-spin { to { transform: rotate(360deg); } }
+        /* Traceroute ant-path animation */
+        @keyframes ant-march { to { stroke-dashoffset: -24; } }
+        .trace-route-line { stroke: #06b6d4; stroke-width: 3; stroke-dasharray: 8 12; animation: ant-march 0.8s linear infinite; }
+        .trace-hop-marker {
+            width: 20px; height: 20px; border-radius: 50%;
+            background: rgba(17,24,39,0.9); border: 2px solid #06b6d4;
+            color: #06b6d4; font-size: 10px; font-weight: 700;
+            display: flex; align-items: center; justify-content: center;
+            box-shadow: 0 0 8px rgba(6,182,212,0.4);
+        }
+        .trace-hop-tooltip {
+            background: rgba(17,24,39,0.92); border: 1px solid #374151;
+            color: #e5e7eb; font-size: 11px; padding: 2px 6px;
+            border-radius: 4px; box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+        }
+        .trace-hop-tooltip::before { border-top-color: #374151 !important; }
         /* Map filter overlay */
         .map-filters {
             position: absolute; top: 10px; left: 55px; z-index: 1000;
@@ -743,6 +775,17 @@
                 updateNodeSignal(sig);
             });
 
+            evtSource.addEventListener('node_update', function(e) {
+                if (paused) return;
+                const info = JSON.parse(e.data);
+                updateNodeInfo(info);
+            });
+
+            evtSource.addEventListener('traceroute_result', function(e) {
+                const data = JSON.parse(e.data);
+                handleTracerouteResult(data);
+            });
+
             evtSource.addEventListener('chat_history', function(e) {
                 const messages = JSON.parse(e.data);
                 loadChatHistory(messages);
@@ -983,6 +1026,8 @@
         let mapInstance = null;
         let mapMarkers = {};   // nodeNum string → L.marker
         let mapInitialized = false;
+        let traceRouteLayer = null;  // L.layerGroup for current traceroute visualization
+        let pendingTraceroute = null; // {target: nodeNum, timer: timeoutId} or null
 
         // Expose initMap globally for tab switching
         window.initMap = function() {
@@ -1102,6 +1147,14 @@
                 if (entry.barometric_pressure) h += npRow('Pressure', entry.barometric_pressure.toFixed(1) + ' hPa');
                 h += '</div>';
             }
+
+            // ── Trace Route button ──
+            h += '<div class="np-section" style="text-align:center;">';
+            h += '<button class="np-trace-btn" id="trace-btn-' + nodeNum + '" onclick="startTraceroute(' + nodeNum + ')">';
+            h += '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px;">';
+            h += '<circle cx="12" cy="12" r="10"/><line x1="22" y1="12" x2="18" y2="12"/><line x1="6" y1="12" x2="2" y2="12"/><line x1="12" y1="6" x2="12" y2="2"/><line x1="12" y1="22" x2="12" y2="18"/></svg>';
+            h += 'Trace Route</button>';
+            h += '</div>';
 
             h += '</div>';
             return h;
@@ -1298,6 +1351,231 @@
 
             // Update heatmap if active
             updateHeatmap();
+        }
+
+        // ══════════════════════════════════════════════
+        // ── Node Info Updates (NODEINFO_APP) ──
+        // ══════════════════════════════════════════════
+
+        window.updateNodeInfo = function(info) {
+            if (!nodeDir) nodeDir = {};
+
+            const numStr = info.node_num.toString();
+            if (!nodeDir[numStr]) {
+                nodeDir[numStr] = {};
+            }
+            const entry = nodeDir[numStr];
+
+            // Update identity fields
+            if (info.short_name) entry.short_name = info.short_name;
+            if (info.long_name) entry.long_name = info.long_name;
+            if (info.user_id) entry.user_id = info.user_id;
+            if (info.hw_model) entry.hw_model = info.hw_model;
+            if (info.role) entry.role = info.role;
+            entry.is_licensed = info.is_licensed || false;
+
+            // Refresh map marker icon/popup if it exists (name may have changed)
+            if (mapInstance && mapMarkers[numStr]) {
+                mapMarkers[numStr].setIcon(createNodeIcon(entry.short_name));
+                if (mapMarkers[numStr].isPopupOpen()) {
+                    mapMarkers[numStr].setPopupContent(nodePopupHTML(numStr, entry));
+                }
+            }
+        }
+
+        // ══════════════════════════════════════════════
+        // ── Trace Route ──
+        // ══════════════════════════════════════════════
+
+        function nodeHexName(num) {
+            if (!num) return '?';
+            const numStr = num.toString();
+            const entry = nodeDir ? nodeDir[numStr] : null;
+            if (entry && entry.short_name) return entry.short_name;
+            return '!' + num.toString(16).padStart(8, '0');
+        }
+
+        function clearTraceRoute() {
+            if (traceRouteLayer) {
+                mapInstance.removeLayer(traceRouteLayer);
+                traceRouteLayer = null;
+            }
+        }
+
+        function resetTraceBtn(nodeNum) {
+            const btn = document.getElementById('trace-btn-' + nodeNum);
+            if (!btn) return;
+            btn.disabled = false;
+            const spinner = btn.querySelector('.spinner');
+            if (spinner) spinner.remove();
+        }
+
+        window.startTraceroute = function(nodeNum) {
+            // Clear previous route
+            clearTraceRoute();
+
+            // Cancel any pending traceroute
+            if (pendingTraceroute) {
+                clearTimeout(pendingTraceroute.timer);
+                resetTraceBtn(pendingTraceroute.target);
+            }
+
+            // Set button to loading state
+            const btn = document.getElementById('trace-btn-' + nodeNum);
+            if (btn) {
+                btn.disabled = true;
+                // Add spinner if not already present
+                if (!btn.querySelector('.spinner')) {
+                    const sp = document.createElement('span');
+                    sp.className = 'spinner';
+                    btn.appendChild(sp);
+                }
+            }
+
+            // Send traceroute request
+            fetch('/api/traceroute', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({target: nodeNum}),
+            }).catch(function(err) {
+                console.error('Traceroute request failed:', err);
+                resetTraceBtn(nodeNum);
+            });
+
+            // Set timeout (30s)
+            const timer = setTimeout(function() {
+                resetTraceBtn(nodeNum);
+                pendingTraceroute = null;
+                // Brief "no response" flash on button
+                if (btn) {
+                    btn.textContent = 'No response';
+                    btn.style.color = '#f87171';
+                    setTimeout(function() {
+                        btn.textContent = '';
+                        btn.style.color = '';
+                        btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px;">'
+                            + '<circle cx="12" cy="12" r="10"/><line x1="22" y1="12" x2="18" y2="12"/><line x1="6" y1="12" x2="2" y2="12"/><line x1="12" y1="6" x2="12" y2="2"/><line x1="12" y1="22" x2="12" y2="18"/></svg>'
+                            + 'Trace Route';
+                    }, 2000);
+                }
+            }, 30000);
+
+            pendingTraceroute = {target: nodeNum, timer: timer};
+        }
+
+        window.handleTracerouteResult = function(data) {
+            // data: {from: uint32, to: uint32, route: [], route_back: []}
+            // from = target node that responded, to = our node
+            // Full forward path: to → route[0] → route[1] → ... → from
+
+            // Match to pending traceroute
+            if (!pendingTraceroute || pendingTraceroute.target !== data.from) return;
+
+            clearTimeout(pendingTraceroute.timer);
+            resetTraceBtn(pendingTraceroute.target);
+            pendingTraceroute = null;
+
+            drawTraceroute(data);
+        }
+
+        function drawTraceroute(data) {
+            if (!mapInstance || !nodeDir) return;
+
+            clearTraceRoute();
+
+            // Build ordered list of node numbers: our node → hops → target
+            const hopNums = [data.to];
+            if (data.route) {
+                for (let i = 0; i < data.route.length; i++) {
+                    hopNums.push(data.route[i]);
+                }
+            }
+            hopNums.push(data.from);
+
+            // Collect coordinates for nodes that have position data
+            const coords = [];
+            const coordHops = []; // parallel array: {num, index} for markers
+            for (let i = 0; i < hopNums.length; i++) {
+                const numStr = hopNums[i].toString();
+                const entry = nodeDir[numStr];
+                if (entry && (entry.latitude || entry.longitude)) {
+                    coords.push([entry.latitude, entry.longitude]);
+                    coordHops.push({num: hopNums[i], index: i});
+                }
+            }
+
+            if (coords.length < 2) return; // Need at least 2 points to draw a line
+
+            const layers = [];
+
+            // Draw polyline with ant-path animation
+            const line = L.polyline(coords, {
+                className: 'trace-route-line',
+                weight: 3,
+                opacity: 0.9,
+                interactive: true,
+            });
+
+            // Build popup content for the route line
+            let popupHtml = '<div style="font-size:12px;color:#e5e7eb;line-height:1.6;">';
+            popupHtml += '<div style="font-weight:600;color:#06b6d4;margin-bottom:4px;">Trace Route</div>';
+            for (let i = 0; i < hopNums.length; i++) {
+                if (i > 0) popupHtml += ' <span style="color:#4b5563;">→</span> ';
+                const name = nodeHexName(hopNums[i]);
+                if (i === 0) {
+                    popupHtml += '<span style="color:#34d399;">' + esc(name) + '</span>';
+                } else if (i === hopNums.length - 1) {
+                    popupHtml += '<span style="color:#f59e0b;">' + esc(name) + '</span>';
+                } else {
+                    popupHtml += '<span style="color:#e5e7eb;">' + esc(name) + '</span>';
+                }
+            }
+            popupHtml += '<div style="color:#6b7280;margin-top:4px;font-size:11px;">'
+                + hopNums.length + ' nodes, ' + (hopNums.length - 1) + ' hop(s)</div>';
+            if (data.route_back && data.route_back.length > 0) {
+                popupHtml += '<div style="color:#6b7280;font-size:11px;">Return: ';
+                popupHtml += esc(nodeHexName(data.from));
+                for (let i = 0; i < data.route_back.length; i++) {
+                    popupHtml += ' → ' + esc(nodeHexName(data.route_back[i]));
+                }
+                popupHtml += ' → ' + esc(nodeHexName(data.to));
+                popupHtml += '</div>';
+            }
+            popupHtml += '</div>';
+            line.bindPopup(popupHtml, {maxWidth: 350});
+            layers.push(line);
+
+            // Add hop markers with numbers
+            for (let i = 0; i < coordHops.length; i++) {
+                const hop = coordHops[i];
+                const name = nodeHexName(hop.num);
+                const isStart = (hop.index === 0);
+                const isEnd = (hop.index === hopNums.length - 1);
+                const color = isStart ? '#34d399' : isEnd ? '#f59e0b' : '#06b6d4';
+
+                const marker = L.marker(coords[i], {
+                    icon: L.divIcon({
+                        className: '',
+                        html: '<div class="trace-hop-marker" style="border-color:' + color + ';color:' + color + ';">' + hop.index + '</div>',
+                        iconSize: [22, 22],
+                        iconAnchor: [11, 11],
+                    }),
+                    interactive: true,
+                });
+                marker.bindTooltip(name, {
+                    permanent: false,
+                    direction: 'top',
+                    offset: [0, -14],
+                    className: 'trace-hop-tooltip',
+                });
+                layers.push(marker);
+            }
+
+            traceRouteLayer = L.layerGroup(layers).addTo(mapInstance);
+
+            // Fit map to show the full route
+            const bounds = L.latLngBounds(coords);
+            mapInstance.fitBounds(bounds, {padding: [60, 60], maxZoom: 15});
         }
 
         // ══════════════════════════════════════════════

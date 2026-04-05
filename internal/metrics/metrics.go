@@ -96,6 +96,27 @@ type SignalUpdate struct {
 	RxSnr     float32 `json:"rx_snr"`
 }
 
+// NodeInfoUpdate is published via SSE when a node's identity is discovered
+// or updated from a NODEINFO_APP packet received after the initial config cache.
+type NodeInfoUpdate struct {
+	NodeNum    uint32 `json:"node_num"`
+	ShortName  string `json:"short_name"`
+	LongName   string `json:"long_name"`
+	UserID     string `json:"user_id,omitempty"`
+	HwModel    string `json:"hw_model,omitempty"`
+	Role       string `json:"role,omitempty"`
+	IsLicensed bool   `json:"is_licensed,omitempty"`
+	IsNew      bool   `json:"is_new"` // true if this is a newly discovered node
+}
+
+// TracerouteUpdate is published via SSE when a TRACEROUTE_APP response is received.
+type TracerouteUpdate struct {
+	From      uint32   `json:"from"`       // target node that responded
+	To        uint32   `json:"to"`         // requesting node (our node)
+	Route     []uint32 `json:"route"`      // forward hops (requester → target)
+	RouteBack []uint32 `json:"route_back"` // return hops (target → requester)
+}
+
 // ChatMessage stores a single text message from the mesh network.
 type ChatMessage struct {
 	Timestamp time.Time `json:"timestamp"`
@@ -469,6 +490,58 @@ func (m *Metrics) UpdateNodeSignal(update SignalUpdate) {
 	m.nodeDirMu.Unlock()
 
 	m.publish(Event{Type: "node_signal_update", Data: update})
+}
+
+// UpsertNode updates the identity fields of a node in the directory (or creates
+// a new entry) and publishes a "node_update" SSE event. This is called when a
+// NODEINFO_APP packet is received after the initial config cache, allowing the
+// dashboard to discover new nodes joining the mesh in real time.
+func (m *Metrics) UpsertNode(update NodeInfoUpdate) {
+	m.nodeDirMu.Lock()
+	if m.nodeDir == nil {
+		m.nodeDir = make(map[uint32]NodeEntry)
+	}
+
+	entry, exists := m.nodeDir[update.NodeNum]
+	update.IsNew = !exists
+
+	// Update identity fields
+	if update.ShortName != "" {
+		entry.ShortName = update.ShortName
+	}
+	if update.LongName != "" {
+		entry.LongName = update.LongName
+	}
+	if update.UserID != "" {
+		entry.UserID = update.UserID
+	}
+	if update.HwModel != "" {
+		entry.HwModel = update.HwModel
+	}
+	if update.Role != "" {
+		entry.Role = update.Role
+	}
+	entry.IsLicensed = update.IsLicensed
+
+	m.nodeDir[update.NodeNum] = entry
+
+	// Update relay index if this is a new node
+	if update.IsNew {
+		if m.relayDir == nil {
+			m.relayDir = make(map[uint8][]uint32)
+		}
+		key := uint8(update.NodeNum & 0xFF)
+		m.relayDir[key] = append(m.relayDir[key], update.NodeNum)
+	}
+	m.nodeDirMu.Unlock()
+
+	m.publish(Event{Type: "node_update", Data: update})
+}
+
+// PublishTraceroute publishes a "traceroute_result" SSE event when a
+// TRACEROUTE_APP response is received from the mesh network.
+func (m *Metrics) PublishTraceroute(update TracerouteUpdate) {
+	m.publish(Event{Type: "traceroute_result", Data: update})
 }
 
 // RecordMessage adds a message to the log.

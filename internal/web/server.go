@@ -147,6 +147,9 @@ func (s *Server) buildMux() *http.ServeMux {
 	mux.HandleFunc("/api/chat/send", s.handleAPIChatSend)
 	mux.HandleFunc("/api/chat/channels", s.handleAPIChatChannels)
 
+	// Traceroute API
+	mux.HandleFunc("/api/traceroute", s.handleAPITraceroute)
+
 	// Prometheus metrics endpoint
 	if s.promHandler != nil {
 		mux.Handle("/metrics", s.promHandler)
@@ -323,6 +326,73 @@ func (s *Server) handleAPIChatSend(w http.ResponseWriter, r *http.Request) {
 	data, err := proto.Marshal(toRadio)
 	if err != nil {
 		s.logger.Error("failed to marshal chat ToRadio", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	s.sendToNodeFn(data)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"ok":true}` + "\n"))
+}
+
+// tracerouteRequest is the JSON body for POST /api/traceroute.
+type tracerouteRequest struct {
+	Target uint32 `json:"target"` // destination node number
+}
+
+// handleAPITraceroute sends a traceroute request to the specified node.
+// The result arrives asynchronously via SSE "traceroute_result" event.
+func (s *Server) handleAPITraceroute(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.sendToNodeFn == nil {
+		http.Error(w, "traceroute not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req tracerouteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.Target == 0 {
+		http.Error(w, "target is required", http.StatusBadRequest)
+		return
+	}
+
+	// Build ToRadio with MeshPacket containing TRACEROUTE_APP + WantResponse
+	routePayload, err := proto.Marshal(&pb.RouteDiscovery{})
+	if err != nil {
+		s.logger.Error("failed to marshal RouteDiscovery", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	toRadio := &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Packet{
+			Packet: &pb.MeshPacket{
+				To: req.Target,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum:      pb.PortNum_TRACEROUTE_APP,
+						Payload:      routePayload,
+						WantResponse: true,
+					},
+				},
+				WantAck: true,
+			},
+		},
+	}
+
+	data, err := proto.Marshal(toRadio)
+	if err != nil {
+		s.logger.Error("failed to marshal traceroute ToRadio", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

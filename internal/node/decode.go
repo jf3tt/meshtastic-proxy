@@ -589,6 +589,97 @@ func extractMyNodeNum(payload []byte) uint32 {
 	return 0
 }
 
+// NodeInfoData holds identity fields extracted from a NODEINFO_APP packet.
+// This is used for real-time node discovery — when a new node joins the mesh
+// and sends a NODEINFO_APP broadcast, the proxy can add it to the node directory
+// without waiting for a full config re-request.
+type NodeInfoData struct {
+	NodeNum    uint32
+	ShortName  string
+	LongName   string
+	UserID     string
+	HwModel    string
+	Role       string
+	IsLicensed bool
+}
+
+// ExtractNodeInfo tries to extract node identity from a FromRadio payload
+// containing a decoded MeshPacket with PortNum_NODEINFO_APP.
+// Returns nil if the payload is not a NODEINFO_APP packet or cannot be decoded.
+func ExtractNodeInfo(payload []byte) *NodeInfoData {
+	msg := &pb.FromRadio{}
+	if err := proto.Unmarshal(payload, msg); err != nil {
+		return nil
+	}
+	pkt, ok := msg.GetPayloadVariant().(*pb.FromRadio_Packet)
+	if !ok || pkt.Packet == nil {
+		return nil
+	}
+	decoded, ok := pkt.Packet.GetPayloadVariant().(*pb.MeshPacket_Decoded)
+	if !ok || decoded.Decoded == nil {
+		return nil
+	}
+	if decoded.Decoded.GetPortnum() != pb.PortNum_NODEINFO_APP {
+		return nil
+	}
+	user := &pb.User{}
+	if err := proto.Unmarshal(decoded.Decoded.GetPayload(), user); err != nil {
+		return nil
+	}
+	from := pkt.Packet.GetFrom()
+	if from == 0 {
+		return nil
+	}
+	return &NodeInfoData{
+		NodeNum:    from,
+		ShortName:  user.GetShortName(),
+		LongName:   user.GetLongName(),
+		UserID:     user.GetId(),
+		HwModel:    user.GetHwModel().String(),
+		Role:       user.GetRole().String(),
+		IsLicensed: user.GetIsLicensed(),
+	}
+}
+
+// TracerouteData holds the route discovered by a TRACEROUTE_APP response.
+type TracerouteData struct {
+	From      uint32   // who responded (target node)
+	To        uint32   // who requested (our node)
+	Route     []uint32 // forward hops (from requester toward target)
+	RouteBack []uint32 // return hops (from target back to requester)
+}
+
+// ExtractTraceroute tries to extract a traceroute response from a FromRadio
+// payload containing a decoded MeshPacket with PortNum_TRACEROUTE_APP.
+// Returns nil if the payload is not a TRACEROUTE_APP packet or cannot be decoded.
+func ExtractTraceroute(payload []byte) *TracerouteData {
+	msg := &pb.FromRadio{}
+	if err := proto.Unmarshal(payload, msg); err != nil {
+		return nil
+	}
+	pkt, ok := msg.GetPayloadVariant().(*pb.FromRadio_Packet)
+	if !ok || pkt.Packet == nil {
+		return nil
+	}
+	decoded, ok := pkt.Packet.GetPayloadVariant().(*pb.MeshPacket_Decoded)
+	if !ok || decoded.Decoded == nil {
+		return nil
+	}
+	if decoded.Decoded.GetPortnum() != pb.PortNum_TRACEROUTE_APP {
+		return nil
+	}
+	route := &pb.RouteDiscovery{}
+	if err := proto.Unmarshal(decoded.Decoded.GetPayload(), route); err != nil {
+		return nil
+	}
+	return &TracerouteData{
+		From:      pkt.Packet.GetFrom(),
+		To:        pkt.Packet.GetTo(),
+		Route:     route.GetRoute(),
+		RouteBack: route.GetRouteBack(),
+	}
+}
+
 // ChatMessageData holds raw chat message fields extracted from a MeshPacket.
 // The caller is responsible for enriching it with node names from the directory.
 type ChatMessageData struct {

@@ -342,6 +342,32 @@ func (c *Connection) readLoop(ctx context.Context, conn net.Conn) error {
 			c.recordChatMessage(chat, "incoming")
 		}
 
+		// Update node directory from NODEINFO_APP packets in real time.
+		// This catches new nodes that join the mesh after the initial
+		// config cache was built, and also updates identity fields
+		// (name, hw model, role) for existing nodes.
+		if ni := ExtractNodeInfo(payload); ni != nil {
+			c.metrics.UpsertNode(metrics.NodeInfoUpdate{
+				NodeNum:    ni.NodeNum,
+				ShortName:  ni.ShortName,
+				LongName:   ni.LongName,
+				UserID:     ni.UserID,
+				HwModel:    ni.HwModel,
+				Role:       ni.Role,
+				IsLicensed: ni.IsLicensed,
+			})
+		}
+
+		// Publish traceroute responses so the dashboard can visualize the route.
+		if tr := ExtractTraceroute(payload); tr != nil {
+			c.metrics.PublishTraceroute(metrics.TracerouteUpdate{
+				From:      tr.From,
+				To:        tr.To,
+				Route:     tr.Route,
+				RouteBack: tr.RouteBack,
+			})
+		}
+
 		// Config caching logic
 		switch rec.Type {
 		case "my_info":
