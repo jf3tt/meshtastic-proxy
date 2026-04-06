@@ -10,9 +10,9 @@ A TCP proxy for [Meshtastic](https://meshtastic.org/) LoRa mesh radio nodes. Con
 - **Cached config replay** — node configuration is cached on first connect and delivered instantly to new clients, eliminating slow re-reads from the radio
 - **iOS two-phase config** — supports special firmware nonces (`69420`/`69421`) used by the iOS Meshtastic app for split config + node database loading
 - **mDNS advertisement** — advertises as `_meshtastic._tcp` so Meshtastic apps auto-discover the proxy on the local network
-- **Web dashboard** — real-time traffic graphs, message types breakdown, connected clients list, and recent message log via SSE
-- **Prometheus metrics** — `/metrics` endpoint exposing proxy traffic, connection reliability, mesh node counts, and message breakdowns by port type, plus Go runtime and process metrics
-- **Grafana dashboard** — pre-built JSON dashboard with overview stats, traffic rates, message type distribution, connection reliability, and Go runtime panels
+- **Web dashboard** — real-time traffic graphs, message types breakdown, connected clients list, node map with RSSI/SNR heat map overlay, mesh chat with channel support, traceroute to nodes, and recent message log via SSE
+- **Prometheus metrics** — `/metrics` endpoint exposing proxy traffic, connection reliability, mesh node counts, per-node RSSI and SNR, and message breakdowns by port type, plus Go runtime and process metrics
+- **Grafana dashboard** — pre-built JSON dashboard with overview stats, traffic rates, message type distribution, RF signal quality (RSSI/SNR per node), connection reliability, and Go runtime panels
 - **Kubernetes-ready** — manifests for `hostNetwork` deployment with mDNS on bare-metal clusters
 
 ## Architecture
@@ -101,6 +101,8 @@ The proxy exposes a `/metrics` endpoint on the web server port (default `:8080`)
 | `meshtastic_proxy_config_replays_total` | Counter | Config replays by type (`full`, `config_only`, `nodes_only`) |
 | `meshtastic_proxy_messages_total` | Counter | Messages by `port_num` (e.g. `POSITION_APP`, `TEXT_MESSAGE_APP`) |
 | `meshtastic_proxy_mesh_nodes` | Gauge | Known nodes in the mesh network |
+| `meshtastic_proxy_node_rssi_dbm` | Gauge | Last received RSSI in dBm per node (labels: `node_num`, `short_name`) |
+| `meshtastic_proxy_node_snr_db` | Gauge | Last received SNR in dB per node (labels: `node_num`, `short_name`) |
 
 Standard `go_*` and `process_*` metrics are also included.
 
@@ -111,6 +113,7 @@ A pre-built Grafana dashboard is provided at [`deploy/grafana/grafana-dashboard.
 - **Overview** — node status, uptime, active clients, mesh nodes, config cache stats
 - **Traffic** — frame rate, byte rate, and cumulative traffic (bidirectional)
 - **Messages** — donut chart by port type, stacked message rate over time, total count
+- **RF Signal Quality** — RSSI and SNR per node over time, signal quality table with color-coded thresholds
 - **Connection Reliability** — reconnect rate, error rate, config replay rate
 - **Go Runtime** (collapsed) — goroutines, memory, GC duration, CPU usage
 
