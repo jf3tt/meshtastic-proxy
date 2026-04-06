@@ -555,7 +555,10 @@ func (p *Proxy) echoToOtherClients(payload []byte, sender *Client) {
 
 	// Clone the packet so we don't mutate the original payload's
 	// deserialized message if it's referenced elsewhere.
-	meshPkt := proto.Clone(pkt.Packet).(*pb.MeshPacket)
+	meshPkt, ok := proto.Clone(pkt.Packet).(*pb.MeshPacket)
+	if !ok {
+		return
+	}
 
 	// Fill in From if the client left it as 0 (node normally fills it).
 	if meshPkt.GetFrom() == 0 {
