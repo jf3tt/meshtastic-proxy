@@ -1613,19 +1613,20 @@
 
                 let intensity;
                 if (mode === 'rssi') {
-                    // RSSI ranges from ~ -120 (weakest) to ~ -40 (strongest)
-                    // Use rx_rssi (live per-packet) with fallback to 0
+                    // Typical LoRa RSSI: -115 dBm (weak) to -75 dBm (strong).
+                    // Values outside this range are clamped to 0..1.
                     const rssi = entry.rx_rssi;
                     if (!rssi) continue;
-                    // Normalize: -120 → 0.0, -40 → 1.0
-                    intensity = Math.max(0, Math.min(1, (rssi + 120) / 80));
+                    const linear = Math.max(0, Math.min(1, (rssi + 115) / 40));
+                    // Power curve (γ=0.6) boosts mid-range values so typical
+                    // LoRa signals (-90…-100 dBm) render visibly on the map.
+                    intensity = Math.pow(linear, 0.6);
                 } else if (mode === 'snr') {
-                    // SNR ranges from ~ -20 (worst) to ~ +15 (best)
-                    // Use rx_snr (live) if available, fallback to snr (from config cache)
+                    // Typical LoRa SNR: -15 dB (worst) to +12 dB (best).
                     const snr = entry.rx_snr || entry.snr;
                     if (!snr && snr !== 0) continue;
-                    // Normalize: -20 → 0.0, +15 → 1.0
-                    intensity = Math.max(0, Math.min(1, (snr + 20) / 35));
+                    const linear = Math.max(0, Math.min(1, (snr + 15) / 27));
+                    intensity = Math.pow(linear, 0.6);
                 } else {
                     continue;
                 }
@@ -1650,11 +1651,11 @@
             const points = getHeatmapPoints(heatmapMode);
             const gradient = heatmapMode === 'rssi' ? rssiGradient : snrGradient;
             const opts = {
-                radius: 40,
-                blur: 25,
+                radius: 55,
+                blur: 30,
                 maxZoom: 17,
                 max: 1.0,
-                minOpacity: 0.15,
+                minOpacity: 0.35,
                 gradient: gradient,
             };
 
@@ -1678,12 +1679,12 @@
 
             if (heatmapMode === 'rssi') {
                 document.getElementById('hm-legend-title').textContent = 'RSSI';
-                document.getElementById('hm-label-low').textContent = '-120 dBm';
-                document.getElementById('hm-label-high').textContent = '-40 dBm';
+                document.getElementById('hm-label-low').textContent = '-115 dBm';
+                document.getElementById('hm-label-high').textContent = '-75 dBm';
             } else {
                 document.getElementById('hm-legend-title').textContent = 'SNR';
-                document.getElementById('hm-label-low').textContent = '-20 dB';
-                document.getElementById('hm-label-high').textContent = '+15 dB';
+                document.getElementById('hm-label-low').textContent = '-15 dB';
+                document.getElementById('hm-label-high').textContent = '+12 dB';
             }
         }
 
