@@ -1425,14 +1425,23 @@
               "job": true,
               "job 1": true,
               "job 2": true,
+              "namespace": true,
+              "namespace 1": true,
+              "namespace 2": true,
+              "node": true,
+              "node 1": true,
+              "node 2": true,
+              "pod": true,
+              "pod 1": true,
+              "pod 2": true,
+              "node_num": true,
+              "node_num 1": true,
               "node_num 2": true
             },
             "indexByName": {},
             "renameByName": {
               "Value #A": "RSSI (dBm)",
               "Value #B": "SNR (dB)",
-              "node_num": "Node Number",
-              "node_num 1": "Node Number",
               "short_name": "Node"
             }
           }
