@@ -1150,10 +1150,15 @@
 
             // ── Trace Route button ──
             h += '<div class="np-section" style="text-align:center;">';
-            h += '<button class="np-trace-btn" id="trace-btn-' + nodeNum + '" onclick="startTraceroute(' + nodeNum + ')">';
+            const tracing = pendingTraceroute !== null;
+            const tracingThis = tracing && pendingTraceroute.target === parseInt(nodeNum);
+            h += '<button class="np-trace-btn" id="trace-btn-' + nodeNum + '"'
+               + (tracing ? ' disabled' : '')
+               + ' onclick="startTraceroute(' + nodeNum + ')">';
             h += '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px;">';
             h += '<circle cx="12" cy="12" r="10"/><line x1="22" y1="12" x2="18" y2="12"/><line x1="6" y1="12" x2="2" y2="12"/><line x1="12" y1="6" x2="12" y2="2"/><line x1="12" y1="22" x2="12" y2="18"/></svg>';
-            h += 'Trace Route</button>';
+            h += tracingThis ? 'Tracing…<span class="spinner"></span>' : tracing ? 'Trace busy' : 'Trace Route';
+            h += '</button>';
             h += '</div>';
 
             h += '</div>';
@@ -1411,14 +1416,11 @@
         }
 
         window.startTraceroute = function(nodeNum) {
+            // Guard: ignore if a traceroute is already in flight
+            if (pendingTraceroute) return;
+
             // Clear previous route
             clearTraceRoute();
-
-            // Cancel any pending traceroute
-            if (pendingTraceroute) {
-                clearTimeout(pendingTraceroute.timer);
-                resetTraceBtn(pendingTraceroute.target);
-            }
 
             // Set button to loading state
             const btn = document.getElementById('trace-btn-' + nodeNum);

@@ -28,6 +28,7 @@ type NodeConnection interface {
 	ConfigCache() [][]byte
 	FromNode() <-chan []byte
 	Send(payload []byte)
+	MyNodeNum() uint32
 }
 
 // Proxy is the main hub that accepts client connections and multiplexes
@@ -179,7 +180,10 @@ func (p *Proxy) handleNewConnection(ctx context.Context, conn net.Conn) {
 					return // do NOT forward to node
 				}
 			}
-			// Forward all other ToRadio frames to node
+			// Forward all other ToRadio frames to node.
+			// Echo MeshPackets to other connected clients so they see
+			// messages sent by their peers through the shared node.
+			p.echoToOtherClients(payload, client)
 			p.nodeConn.Send(payload)
 		},
 		func(c *Client) {
@@ -517,6 +521,62 @@ func (p *Proxy) broadcast(payload []byte) {
 		// into a new frame buffer before writing.
 		c.Send(payload)
 	}
+}
+
+// broadcastToOthers sends a payload to all connected clients except the sender.
+// Used to echo outgoing MeshPackets so that other clients see messages sent
+// by their peers through the shared node connection.
+func (p *Proxy) broadcastToOthers(payload []byte, sender *Client) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	for c := range p.clients {
+		if c != sender {
+			c.Send(payload)
+		}
+	}
+}
+
+// echoToOtherClients converts an outgoing ToRadio MeshPacket into a FromRadio
+// frame and delivers it to all clients except the sender. This ensures that
+// when multiple clients share the same node, messages sent by one client are
+// visible to the others. If the MeshPacket has From == 0 (the node normally
+// fills this in), the proxy substitutes the node's own number.
+func (p *Proxy) echoToOtherClients(payload []byte, sender *Client) {
+	msg := &pb.ToRadio{}
+	if err := proto.Unmarshal(payload, msg); err != nil {
+		return
+	}
+
+	pkt, ok := msg.GetPayloadVariant().(*pb.ToRadio_Packet)
+	if !ok || pkt.Packet == nil {
+		return // not a MeshPacket (e.g. heartbeat) — nothing to echo
+	}
+
+	// Clone the packet so we don't mutate the original payload's
+	// deserialized message if it's referenced elsewhere.
+	meshPkt := proto.Clone(pkt.Packet).(*pb.MeshPacket)
+
+	// Fill in From if the client left it as 0 (node normally fills it).
+	if meshPkt.GetFrom() == 0 {
+		if nodeNum := p.nodeConn.MyNodeNum(); nodeNum != 0 {
+			meshPkt.From = nodeNum
+		}
+	}
+
+	fromRadio := &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: meshPkt,
+		},
+	}
+
+	data, err := proto.Marshal(fromRadio)
+	if err != nil {
+		p.logger.Warn("failed to marshal echo FromRadio", "error", err)
+		return
+	}
+
+	p.broadcastToOthers(data, sender)
 }
 
 // decodeToRadioType unmarshals a ToRadio protobuf for type inspection.

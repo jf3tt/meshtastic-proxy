@@ -158,10 +158,11 @@ func buildTestCache(t *testing.T, myNodeNum uint32, otherNodeNums []uint32) [][]
 
 // mockNodeConn implements NodeConnection for testing.
 type mockNodeConn struct {
-	cache    [][]byte
-	fromNode chan []byte
-	mu       sync.Mutex
-	sent     [][]byte
+	cache     [][]byte
+	fromNode  chan []byte
+	mu        sync.Mutex
+	sent      [][]byte
+	myNodeNum uint32
 }
 
 func newMockNodeConn(cache [][]byte) *mockNodeConn {
@@ -189,6 +190,8 @@ func (m *mockNodeConn) Send(payload []byte) {
 	m.sent = append(m.sent, payload)
 	m.mu.Unlock()
 }
+
+func (m *mockNodeConn) MyNodeNum() uint32 { return m.myNodeNum }
 
 func (m *mockNodeConn) Sent() [][]byte {
 	m.mu.Lock()
@@ -923,6 +926,305 @@ func TestInterception_RegularPacketForwarded(t *testing.T) {
 	if _, ok := msg.GetPayloadVariant().(*pb.ToRadio_Packet); !ok {
 		t.Errorf("forwarded frame type = %T, want *ToRadio_Packet", msg.GetPayloadVariant())
 	}
+}
+
+// ---------------------------------------------------------------------------
+// broadcastToOthers / echoToOtherClients tests
+// ---------------------------------------------------------------------------
+
+func TestBroadcastToOthers_SkipsSender(t *testing.T) {
+	mockNode := newMockNodeConn(nil)
+	m := metrics.New(10, 300)
+	p := New(Options{ListenAddr: ":0", MaxClients: 10, ClientSendBuffer: 256, IOSNodeInfoDelay: 50 * time.Millisecond, NodeConn: mockNode, Metrics: m, Logger: slog.Default()})
+
+	const numClients = 3
+	type clientPair struct {
+		client *Client
+		server net.Conn
+	}
+	pairs := make([]clientPair, numClients)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	for i := 0; i < numClients; i++ {
+		serverConn, clientConn := newTestConnPair(t)
+		client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+		client.Start(ctx)
+		p.registerClient(client)
+		pairs[i] = clientPair{client: client, server: serverConn}
+	}
+
+	// broadcastToOthers with sender = pairs[0].client
+	payload := []byte("echo-test")
+	p.broadcastToOthers(payload, pairs[0].client)
+
+	// Clients 1 and 2 should receive the frame.
+	for i := 1; i < numClients; i++ {
+		got := readFrame(t, pairs[i].server, 2*time.Second)
+		if string(got) != "echo-test" {
+			t.Errorf("client %d: got %q, want %q", i, got, "echo-test")
+		}
+	}
+
+	// Client 0 (sender) should NOT receive the frame.
+	_ = pairs[0].server.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	_, err := protocol.ReadFrame(pairs[0].server)
+	if err == nil {
+		t.Error("sender received the echo frame — should have been excluded")
+	}
+}
+
+func TestBroadcastToOthers_NoClientsNoPanic(t *testing.T) {
+	mockNode := newMockNodeConn(nil)
+	m := metrics.New(10, 300)
+	p := New(Options{ListenAddr: ":0", MaxClients: 10, ClientSendBuffer: 256, IOSNodeInfoDelay: 50 * time.Millisecond, NodeConn: mockNode, Metrics: m, Logger: slog.Default()})
+
+	// Should not panic with empty client map.
+	p.broadcastToOthers([]byte("no-clients"), nil)
+}
+
+func TestEchoToOtherClients_MeshPacket(t *testing.T) {
+	mockNode := newMockNodeConn(nil)
+	mockNode.myNodeNum = 0x12345678
+	m := metrics.New(10, 300)
+	p := New(Options{ListenAddr: ":0", MaxClients: 10, ClientSendBuffer: 256, IOSNodeInfoDelay: 50 * time.Millisecond, NodeConn: mockNode, Metrics: m, Logger: slog.Default()})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Create 2 clients: sender (A) and receiver (B).
+	serverA, clientA := newTestConnPair(t)
+	clientObjA := NewClient(clientA, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+	clientObjA.Start(ctx)
+	p.registerClient(clientObjA)
+
+	serverB, clientB := newTestConnPair(t)
+	clientObjB := NewClient(clientB, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+	clientObjB.Start(ctx)
+	p.registerClient(clientObjB)
+
+	// Client A sends a MeshPacket.
+	toRadioPayload := marshalToRadio(t, &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From: 0x12345678,
+				To:   0xFFFFFFFF,
+				Id:   42,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum: pb.PortNum_TEXT_MESSAGE_APP,
+						Payload: []byte("hello from A"),
+					},
+				},
+			},
+		},
+	})
+
+	p.echoToOtherClients(toRadioPayload, clientObjA)
+
+	// Client B should receive a FromRadio with the same MeshPacket.
+	got := readFrame(t, serverB, 2*time.Second)
+	msg := &pb.FromRadio{}
+	if err := proto.Unmarshal(got, msg); err != nil {
+		t.Fatalf("unmarshal echo: %v", err)
+	}
+	pkt, ok := msg.GetPayloadVariant().(*pb.FromRadio_Packet)
+	if !ok {
+		t.Fatalf("expected FromRadio_Packet, got %T", msg.GetPayloadVariant())
+	}
+	if pkt.Packet.GetFrom() != 0x12345678 {
+		t.Errorf("From = %08x, want 12345678", pkt.Packet.GetFrom())
+	}
+	if pkt.Packet.GetTo() != 0xFFFFFFFF {
+		t.Errorf("To = %08x, want FFFFFFFF", pkt.Packet.GetTo())
+	}
+	if pkt.Packet.GetId() != 42 {
+		t.Errorf("Id = %d, want 42", pkt.Packet.GetId())
+	}
+	decoded, ok := pkt.Packet.GetPayloadVariant().(*pb.MeshPacket_Decoded)
+	if !ok {
+		t.Fatalf("expected MeshPacket_Decoded, got %T", pkt.Packet.GetPayloadVariant())
+	}
+	if string(decoded.Decoded.GetPayload()) != "hello from A" {
+		t.Errorf("payload = %q, want %q", decoded.Decoded.GetPayload(), "hello from A")
+	}
+
+	// Client A (sender) should NOT receive the echo.
+	_ = serverA.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	_, err := protocol.ReadFrame(serverA)
+	if err == nil {
+		t.Error("sender received the echo frame — should have been excluded")
+	}
+}
+
+func TestEchoToOtherClients_FillsFromZero(t *testing.T) {
+	mockNode := newMockNodeConn(nil)
+	mockNode.myNodeNum = 0xAABBCCDD
+	m := metrics.New(10, 300)
+	p := New(Options{ListenAddr: ":0", MaxClients: 10, ClientSendBuffer: 256, IOSNodeInfoDelay: 50 * time.Millisecond, NodeConn: mockNode, Metrics: m, Logger: slog.Default()})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Sender and receiver.
+	_, clientA := newTestConnPair(t)
+	clientObjA := NewClient(clientA, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+	clientObjA.Start(ctx)
+	p.registerClient(clientObjA)
+
+	serverB, clientB := newTestConnPair(t)
+	clientObjB := NewClient(clientB, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+	clientObjB.Start(ctx)
+	p.registerClient(clientObjB)
+
+	// Client A sends a MeshPacket with From=0 (node fills it normally).
+	toRadioPayload := marshalToRadio(t, &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From: 0, // proxy should fill this with myNodeNum
+				To:   0xFFFFFFFF,
+			},
+		},
+	})
+
+	p.echoToOtherClients(toRadioPayload, clientObjA)
+
+	// Client B should receive the packet with From = myNodeNum.
+	got := readFrame(t, serverB, 2*time.Second)
+	msg := &pb.FromRadio{}
+	if err := proto.Unmarshal(got, msg); err != nil {
+		t.Fatalf("unmarshal echo: %v", err)
+	}
+	pkt, ok := msg.GetPayloadVariant().(*pb.FromRadio_Packet)
+	if !ok {
+		t.Fatalf("expected FromRadio_Packet, got %T", msg.GetPayloadVariant())
+	}
+	if pkt.Packet.GetFrom() != 0xAABBCCDD {
+		t.Errorf("From = %08x, want AABBCCDD (myNodeNum)", pkt.Packet.GetFrom())
+	}
+}
+
+func TestEchoToOtherClients_IgnoresNonPacket(t *testing.T) {
+	mockNode := newMockNodeConn(nil)
+	m := metrics.New(10, 300)
+	p := New(Options{ListenAddr: ":0", MaxClients: 10, ClientSendBuffer: 256, IOSNodeInfoDelay: 50 * time.Millisecond, NodeConn: mockNode, Metrics: m, Logger: slog.Default()})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, clientA := newTestConnPair(t)
+	clientObjA := NewClient(clientA, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+	clientObjA.Start(ctx)
+	p.registerClient(clientObjA)
+
+	serverB, clientB := newTestConnPair(t)
+	clientObjB := NewClient(clientB, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+	clientObjB.Start(ctx)
+	p.registerClient(clientObjB)
+
+	// Send a Heartbeat (not a MeshPacket) — should NOT be echoed.
+	heartbeat := marshalToRadio(t, &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Heartbeat{
+			Heartbeat: &pb.Heartbeat{},
+		},
+	})
+
+	p.echoToOtherClients(heartbeat, clientObjA)
+
+	// Client B should NOT receive anything.
+	_ = serverB.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	_, err := protocol.ReadFrame(serverB)
+	if err == nil {
+		t.Error("non-packet frame was echoed — should have been ignored")
+	}
+}
+
+func TestEchoToOtherClients_InvalidPayload(t *testing.T) {
+	mockNode := newMockNodeConn(nil)
+	m := metrics.New(10, 300)
+	p := New(Options{ListenAddr: ":0", MaxClients: 10, ClientSendBuffer: 256, IOSNodeInfoDelay: 50 * time.Millisecond, NodeConn: mockNode, Metrics: m, Logger: slog.Default()})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	serverB, clientB := newTestConnPair(t)
+	clientObjB := NewClient(clientB, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+	clientObjB.Start(ctx)
+	p.registerClient(clientObjB)
+
+	// Invalid protobuf should not panic or send anything.
+	p.echoToOtherClients([]byte{0xFF, 0xFF, 0xFF}, nil)
+
+	_ = serverB.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	_, err := protocol.ReadFrame(serverB)
+	if err == nil {
+		t.Error("invalid payload caused an echo — should have been ignored")
+	}
+}
+
+func TestInterception_RegularPacketEchoedToOtherClients(t *testing.T) {
+	// Integration test: client A sends a MeshPacket via handleNewConnection,
+	// client B (registered separately) should receive it as a FromRadio echo.
+	mockNode := newMockNodeConn(nil)
+	mockNode.myNodeNum = 0x12345678
+	m := metrics.New(10, 300)
+	p := New(Options{ListenAddr: ":0", MaxClients: 10, ClientSendBuffer: 256, IOSNodeInfoDelay: 50 * time.Millisecond, NodeConn: mockNode, Metrics: m, Logger: slog.Default()})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Register client B first (simple client, not via handleNewConnection).
+	serverB, clientB := newTestConnPair(t)
+	clientObjB := NewClient(clientB, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+	clientObjB.Start(ctx)
+	p.registerClient(clientObjB)
+
+	// Client A connects via handleNewConnection.
+	serverA, clientConnA := newTestConnPair(t)
+	p.handleNewConnection(ctx, clientConnA)
+
+	waitFor(t, 2*time.Second, func() bool { return p.Clients() == 2 }, "expected 2 clients")
+
+	// Client A sends a MeshPacket.
+	packet := marshalToRadio(t, &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From: 0x12345678,
+				To:   0xFFFFFFFF,
+				Id:   99,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum: pb.PortNum_TEXT_MESSAGE_APP,
+						Payload: []byte("integration test"),
+					},
+				},
+			},
+		},
+	})
+	if err := protocol.WriteFrame(serverA, packet); err != nil {
+		t.Fatalf("write packet: %v", err)
+	}
+
+	// Client B should receive the echoed FromRadio.
+	got := readFrame(t, serverB, 2*time.Second)
+	msg := &pb.FromRadio{}
+	if err := proto.Unmarshal(got, msg); err != nil {
+		t.Fatalf("unmarshal echo: %v", err)
+	}
+	pkt, ok := msg.GetPayloadVariant().(*pb.FromRadio_Packet)
+	if !ok {
+		t.Fatalf("expected FromRadio_Packet, got %T", msg.GetPayloadVariant())
+	}
+	if pkt.Packet.GetFrom() != 0x12345678 {
+		t.Errorf("From = %08x, want 12345678", pkt.Packet.GetFrom())
+	}
+	if pkt.Packet.GetId() != 99 {
+		t.Errorf("Id = %d, want 99", pkt.Packet.GetId())
+	}
+
+	// Also verify the packet was forwarded to the node.
+	waitFor(t, 2*time.Second, func() bool { return len(mockNode.Sent()) > 0 }, "packet was not forwarded to node")
 }
 
 // ---------------------------------------------------------------------------
