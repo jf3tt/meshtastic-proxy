@@ -83,11 +83,11 @@ func TestPrometheusCollectorValues(t *testing.T) {
 	m.RecordMessage(MessageRecord{Type: "mesh_packet", PortNum: "TEXT_MESSAGE_APP", Size: 60})
 	m.RecordMessage(MessageRecord{Type: "mesh_packet", PortNum: "POSITION_APP", Size: 70})
 
-	// Add some nodes to the directory.
+	// Add some nodes to the directory (some with signal data, some without).
 	m.SetNodeDirectory(map[uint32]NodeEntry{
-		0x12345678: {ShortName: "TST1", LongName: "Test Node 1"},
-		0xABCDEF01: {ShortName: "TST2", LongName: "Test Node 2"},
-		0x11223344: {ShortName: "TST3", LongName: "Test Node 3"},
+		0x12345678: {ShortName: "TST1", LongName: "Test Node 1", RxRssi: -95, RxSnr: 8.5},
+		0xABCDEF01: {ShortName: "TST2", LongName: "Test Node 2", RxRssi: -82, RxSnr: 12.25},
+		0x11223344: {ShortName: "TST3", LongName: "Test Node 3"}, // no signal data
 	})
 
 	collector := newPrometheusCollector(m)
@@ -155,6 +155,9 @@ func TestPrometheusCollectorValues(t *testing.T) {
 
 	messageCounts := make(map[string]float64)
 	replayCounts := make(map[string]float64)
+	rssiValues := make(map[string]float64) // key: node_num
+	snrValues := make(map[string]float64)  // key: node_num
+	rssiNames := make(map[string]string)   // key: node_num → short_name
 	for _, f := range families {
 		switch f.GetName() {
 		case "meshtastic_proxy_messages_total":
@@ -172,6 +175,30 @@ func TestPrometheusCollectorValues(t *testing.T) {
 						replayCounts[lp.GetValue()] = metric.GetCounter().GetValue()
 					}
 				}
+			}
+		case "meshtastic_proxy_node_rssi_dbm":
+			for _, metric := range f.GetMetric() {
+				var nodeNum, shortName string
+				for _, lp := range metric.GetLabel() {
+					switch lp.GetName() {
+					case "node_num":
+						nodeNum = lp.GetValue()
+					case "short_name":
+						shortName = lp.GetValue()
+					}
+				}
+				rssiValues[nodeNum] = metric.GetGauge().GetValue()
+				rssiNames[nodeNum] = shortName
+			}
+		case "meshtastic_proxy_node_snr_db":
+			for _, metric := range f.GetMetric() {
+				var nodeNum string
+				for _, lp := range metric.GetLabel() {
+					if lp.GetName() == "node_num" {
+						nodeNum = lp.GetValue()
+					}
+				}
+				snrValues[nodeNum] = metric.GetGauge().GetValue()
 			}
 		}
 	}
@@ -193,6 +220,39 @@ func TestPrometheusCollectorValues(t *testing.T) {
 	}
 	if replayCounts["nodes_only"] != 3 {
 		t.Errorf("config_replays_total{type=nodes_only} = %v, want 3", replayCounts["nodes_only"])
+	}
+
+	// Verify node_rssi_dbm per-node values.
+	// 0x12345678 = 305419896, 0xABCDEF01 = 2882400001
+	// TST3 (0x11223344) has no RxRssi, so should be absent.
+	if rssiValues["305419896"] != -95 {
+		t.Errorf("node_rssi_dbm{node_num=305419896} = %v, want -95", rssiValues["305419896"])
+	}
+	if rssiNames["305419896"] != "TST1" {
+		t.Errorf("node_rssi_dbm{node_num=305419896} short_name = %q, want %q", rssiNames["305419896"], "TST1")
+	}
+	if rssiValues["2882400001"] != -82 {
+		t.Errorf("node_rssi_dbm{node_num=2882400001} = %v, want -82", rssiValues["2882400001"])
+	}
+	if _, ok := rssiValues["287454020"]; ok { // 0x11223344 = 287454020
+		t.Error("node_rssi_dbm should not emit series for node with RxRssi=0")
+	}
+	if len(rssiValues) != 2 {
+		t.Errorf("node_rssi_dbm series count = %d, want 2", len(rssiValues))
+	}
+
+	// Verify node_snr_db per-node values.
+	if snrValues["305419896"] != 8.5 {
+		t.Errorf("node_snr_db{node_num=305419896} = %v, want 8.5", snrValues["305419896"])
+	}
+	if snrValues["2882400001"] != 12.25 {
+		t.Errorf("node_snr_db{node_num=2882400001} = %v, want 12.25", snrValues["2882400001"])
+	}
+	if _, ok := snrValues["287454020"]; ok {
+		t.Error("node_snr_db should not emit series for node with RxSnr=0")
+	}
+	if len(snrValues) != 2 {
+		t.Errorf("node_snr_db series count = %d, want 2", len(snrValues))
 	}
 }
 
@@ -255,12 +315,44 @@ func TestPrometheusNoMessagesYield(t *testing.T) {
 	}
 }
 
+func TestPrometheusNoSignalYield(t *testing.T) {
+	m := New(100, 300)
+
+	// Nodes with no RSSI/SNR should not produce node_rssi_dbm or node_snr_db series.
+	m.SetNodeDirectory(map[uint32]NodeEntry{
+		0x12345678: {ShortName: "TST1", LongName: "Test Node 1"},
+		0xABCDEF01: {ShortName: "TST2", LongName: "Test Node 2"},
+	})
+
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(newPrometheusCollector(m))
+
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather() error: %v", err)
+	}
+
+	for _, f := range families {
+		switch f.GetName() {
+		case "meshtastic_proxy_node_rssi_dbm":
+			t.Error("expected no node_rssi_dbm when no nodes have RxRssi")
+		case "meshtastic_proxy_node_snr_db":
+			t.Error("expected no node_snr_db when no nodes have RxSnr")
+		}
+	}
+}
+
 func TestPrometheusOutputFormat(t *testing.T) {
 	m := New(100, 300)
 	m.NodeAddress = "10.0.0.1:4403"
 	m.NodeConnected.Store(true)
 	m.ActiveClients.Store(2)
 	m.RecordMessage(MessageRecord{Type: "mesh_packet", PortNum: "TEXT_MESSAGE_APP", Size: 42})
+
+	// Add a node with signal data so RSSI/SNR metrics appear in output.
+	m.SetNodeDirectory(map[uint32]NodeEntry{
+		0x12345678: {ShortName: "TST1", LongName: "Test Node 1", RxRssi: -95, RxSnr: 8.5},
+	})
 
 	reg := NewPrometheusRegistry(m)
 
@@ -285,7 +377,9 @@ func TestPrometheusOutputFormat(t *testing.T) {
 		"meshtastic_proxy_node_connected 1",
 		"meshtastic_proxy_active_clients 2",
 		"meshtastic_proxy_messages_total{port_num=\"TEXT_MESSAGE_APP\"} 1",
-		"meshtastic_proxy_mesh_nodes 0",
+		"meshtastic_proxy_mesh_nodes 1",
+		`meshtastic_proxy_node_rssi_dbm{node_num="305419896",short_name="TST1"} -95`,
+		`meshtastic_proxy_node_snr_db{node_num="305419896",short_name="TST1"} 8.5`,
 		"go_goroutines",
 	}
 

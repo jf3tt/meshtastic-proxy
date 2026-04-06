@@ -230,7 +230,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(meshtastic_proxy_active_clients)",
+          "expr": "max(meshtastic_proxy_active_clients)",
           "legendFormat": "",
           "refId": "A"
         }
@@ -547,7 +547,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(meshtastic_proxy_frames_from_node_total[$__rate_interval]))",
+          "expr": "max(rate(meshtastic_proxy_frames_from_node_total[$__rate_interval]))",
           "legendFormat": "From Node",
           "refId": "A"
         },
@@ -556,7 +556,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(meshtastic_proxy_frames_to_node_total[$__rate_interval]))",
+          "expr": "max(rate(meshtastic_proxy_frames_to_node_total[$__rate_interval]))",
           "legendFormat": "To Node",
           "refId": "B"
         }
@@ -668,7 +668,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(meshtastic_proxy_bytes_from_node_total[$__rate_interval]))",
+          "expr": "max(rate(meshtastic_proxy_bytes_from_node_total[$__rate_interval]))",
           "legendFormat": "From Node",
           "refId": "A"
         },
@@ -677,7 +677,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(meshtastic_proxy_bytes_to_node_total[$__rate_interval]))",
+          "expr": "max(rate(meshtastic_proxy_bytes_to_node_total[$__rate_interval]))",
           "legendFormat": "To Node",
           "refId": "B"
         }
@@ -775,7 +775,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(meshtastic_proxy_bytes_from_node_total)",
+          "expr": "max(increase(meshtastic_proxy_bytes_from_node_total[$__range]))",
           "legendFormat": "From Node",
           "refId": "A"
         },
@@ -784,7 +784,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(meshtastic_proxy_bytes_to_node_total)",
+          "expr": "max(increase(meshtastic_proxy_bytes_to_node_total[$__range]))",
           "legendFormat": "To Node",
           "refId": "B"
         }
@@ -866,7 +866,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (port_num) (meshtastic_proxy_messages_total)",
+          "expr": "max by (port_num) (meshtastic_proxy_messages_total)",
           "legendFormat": "{{port_num}}",
           "refId": "A"
         }
@@ -966,7 +966,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (port_num) (rate(meshtastic_proxy_messages_total[$__rate_interval]))",
+          "expr": "max by (port_num) (rate(meshtastic_proxy_messages_total[$__rate_interval]))",
           "legendFormat": "{{port_num}}",
           "refId": "A"
         }
@@ -1026,7 +1026,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(meshtastic_proxy_messages_total)",
+          "expr": "max(increase(meshtastic_proxy_messages_total[$__range]))",
           "legendFormat": "",
           "refId": "A"
         }
@@ -1041,6 +1041,412 @@
         "w": 24,
         "x": 0,
         "y": 23
+      },
+      "id": 105,
+      "panels": [],
+      "title": "RF Signal Quality",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Last received RSSI (Received Signal Strength Indicator) per mesh node. More negative = weaker signal.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "dBm",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "area"
+            }
+          },
+          "mappings": [],
+          "max": -40,
+          "min": -130,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red"
+              },
+              {
+                "color": "yellow",
+                "value": -110
+              },
+              {
+                "color": "green",
+                "value": -90
+              }
+            ]
+          },
+          "unit": "dBm"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "id": 22,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "sortBy": "Last *",
+          "sortDesc": false
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.0.0+security-01",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "meshtastic_proxy_node_rssi_dbm",
+          "legendFormat": "{{short_name}}",
+          "refId": "A"
+        }
+      ],
+      "title": "RSSI per Node",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Last received SNR (Signal-to-Noise Ratio) per mesh node. Higher = better signal quality.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "dB",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "area"
+            }
+          },
+          "mappings": [],
+          "min": -20,
+          "max": 15,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red"
+              },
+              {
+                "color": "yellow",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 5
+              }
+            ]
+          },
+          "unit": "dB"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      },
+      "id": 23,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "sortBy": "Last *",
+          "sortDesc": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.0.0+security-01",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "meshtastic_proxy_node_snr_db",
+          "legendFormat": "{{short_name}}",
+          "refId": "A"
+        }
+      ],
+      "title": "SNR per Node",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Current signal quality for each mesh node.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "color-text"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "RSSI (dBm)"
+            },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red"
+                    },
+                    {
+                      "color": "yellow",
+                      "value": -110
+                    },
+                    {
+                      "color": "green",
+                      "value": -90
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "unit",
+                "value": "dBm"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "SNR (dB)"
+            },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red"
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 0
+                    },
+                    {
+                      "color": "green",
+                      "value": 5
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "unit",
+                "value": "dB"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 32
+      },
+      "id": 24,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": false,
+            "displayName": "RSSI (dBm)"
+          }
+        ]
+      },
+      "pluginVersion": "12.0.0+security-01",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "meshtastic_proxy_node_rssi_dbm",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "meshtastic_proxy_node_snr_db",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "",
+          "refId": "B"
+        }
+      ],
+      "title": "Signal Quality Table",
+      "transformations": [
+        {
+          "id": "seriesToColumns",
+          "options": {
+            "byField": "short_name"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Time 1": true,
+              "Time 2": true,
+              "__name__": true,
+              "__name__ 1": true,
+              "__name__ 2": true,
+              "instance": true,
+              "instance 1": true,
+              "instance 2": true,
+              "job": true,
+              "job 1": true,
+              "job 2": true,
+              "node_num 2": true
+            },
+            "indexByName": {},
+            "renameByName": {
+              "Value #A": "RSSI (dBm)",
+              "Value #B": "SNR (dB)",
+              "node_num": "Node Number",
+              "node_num 1": "Node Number",
+              "short_name": "Node"
+            }
+          }
+        }
+      ],
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 38
       },
       "id": 103,
       "panels": [],
@@ -1113,7 +1519,7 @@
         "h": 7,
         "w": 6,
         "x": 0,
-        "y": 24
+        "y": 39
       },
       "id": 13,
       "options": {
@@ -1136,7 +1542,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(meshtastic_proxy_node_reconnects_total[$__rate_interval]))",
+          "expr": "max(rate(meshtastic_proxy_node_reconnects_total[$__rate_interval]))",
           "legendFormat": "Reconnects/s",
           "refId": "A"
         }
@@ -1210,7 +1616,7 @@
         "h": 7,
         "w": 6,
         "x": 6,
-        "y": 24
+        "y": 39
       },
       "id": 14,
       "options": {
@@ -1233,7 +1639,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(meshtastic_proxy_node_connection_errors_total[$__rate_interval]))",
+          "expr": "max(rate(meshtastic_proxy_node_connection_errors_total[$__rate_interval]))",
           "legendFormat": "Errors/s",
           "refId": "A"
         }
@@ -1306,7 +1712,7 @@
         "h": 7,
         "w": 8,
         "x": 12,
-        "y": 24
+        "y": 39
       },
       "id": 15,
       "options": {
@@ -1331,7 +1737,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (type) (rate(meshtastic_proxy_config_replays_total[$__rate_interval]))",
+          "expr": "max by (type) (rate(meshtastic_proxy_config_replays_total[$__rate_interval]))",
           "legendFormat": "{{type}}",
           "refId": "A"
         }
@@ -1372,7 +1778,7 @@
         "h": 7,
         "w": 2,
         "x": 20,
-        "y": 24
+        "y": 39
       },
       "id": 16,
       "options": {
@@ -1399,7 +1805,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(meshtastic_proxy_node_reconnects_total)",
+          "expr": "max(increase(meshtastic_proxy_node_reconnects_total[$__range]))",
           "legendFormat": "",
           "refId": "A"
         }
@@ -1440,7 +1846,7 @@
         "h": 7,
         "w": 2,
         "x": 22,
-        "y": 24
+        "y": 39
       },
       "id": 17,
       "options": {
@@ -1467,7 +1873,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(meshtastic_proxy_node_connection_errors_total)",
+          "expr": "max(increase(meshtastic_proxy_node_connection_errors_total[$__range]))",
           "legendFormat": "",
           "refId": "A"
         }
@@ -1481,7 +1887,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 31
+        "y": 46
       },
       "id": 104,
       "panels": [
@@ -1533,7 +1939,7 @@
                 "type": "prometheus",
                 "uid": "prometheus"
               },
-              "expr": "sum(go_goroutines{job=\"meshtastic-proxy-web\"})",
+              "expr": "max(go_goroutines{job=\"meshtastic-proxy-web\"})",
               "legendFormat": "goroutines",
               "refId": "A"
             }
@@ -1657,7 +2063,7 @@
                 "type": "prometheus",
                 "uid": "prometheus"
               },
-              "expr": "sum(rate(go_gc_duration_seconds_sum{job=\"meshtastic-proxy-web\"}[$__rate_interval]))",
+              "expr": "max(rate(go_gc_duration_seconds_sum{job=\"meshtastic-proxy-web\"}[$__rate_interval]))",
               "legendFormat": "GC time/s",
               "refId": "A"
             }
@@ -1714,7 +2120,7 @@
                 "type": "prometheus",
                 "uid": "prometheus"
               },
-              "expr": "sum(rate(process_cpu_seconds_total{job=\"meshtastic-proxy-web\"}[$__rate_interval]))",
+              "expr": "max(rate(process_cpu_seconds_total{job=\"meshtastic-proxy-web\"}[$__rate_interval]))",
               "legendFormat": "CPU",
               "refId": "A"
             }

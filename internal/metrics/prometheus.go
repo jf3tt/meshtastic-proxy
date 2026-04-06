@@ -1,6 +1,8 @@
 package metrics
 
 import (
+	"fmt"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 )
@@ -29,6 +31,8 @@ type prometheusCollector struct {
 	configReplaysTotalDesc    *prometheus.Desc
 	messagesTotalDesc         *prometheus.Desc
 	meshNodesDesc             *prometheus.Desc
+	nodeRssiDesc              *prometheus.Desc
+	nodeSnrDesc               *prometheus.Desc
 }
 
 func newPrometheusCollector(m *Metrics) *prometheusCollector {
@@ -110,6 +114,16 @@ func newPrometheusCollector(m *Metrics) *prometheusCollector {
 			"Number of known nodes in the mesh network.",
 			nil, nil,
 		),
+		nodeRssiDesc: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "node", "rssi_dbm"),
+			"Last received RSSI in dBm for a mesh node.",
+			[]string{"node_num", "short_name"}, nil,
+		),
+		nodeSnrDesc: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "node", "snr_db"),
+			"Last received SNR in dB for a mesh node.",
+			[]string{"node_num", "short_name"}, nil,
+		),
 	}
 }
 
@@ -130,6 +144,8 @@ func (c *prometheusCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.configReplaysTotalDesc
 	ch <- c.messagesTotalDesc
 	ch <- c.meshNodesDesc
+	ch <- c.nodeRssiDesc
+	ch <- c.nodeSnrDesc
 }
 
 // Collect reads current values from the Metrics struct and sends them
@@ -214,9 +230,26 @@ func (c *prometheusCollector) Collect(ch chan<- prometheus.Metric) {
 		)
 	}
 
-	// Mesh nodes count.
+	// Mesh nodes count + per-node signal quality.
 	m.nodeDirMu.RLock()
 	nodeCount := len(m.nodeDir)
+	for num, entry := range m.nodeDir {
+		numStr := fmt.Sprintf("%d", num)
+		name := entry.ShortName
+
+		if entry.RxRssi != 0 {
+			ch <- prometheus.MustNewConstMetric(
+				c.nodeRssiDesc, prometheus.GaugeValue,
+				float64(entry.RxRssi), numStr, name,
+			)
+		}
+		if entry.RxSnr != 0 {
+			ch <- prometheus.MustNewConstMetric(
+				c.nodeSnrDesc, prometheus.GaugeValue,
+				float64(entry.RxSnr), numStr, name,
+			)
+		}
+	}
 	m.nodeDirMu.RUnlock()
 	ch <- prometheus.MustNewConstMetric(
 		c.meshNodesDesc, prometheus.GaugeValue, float64(nodeCount),

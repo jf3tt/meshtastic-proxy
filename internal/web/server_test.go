@@ -640,6 +640,11 @@ func TestPrometheusMetrics_Endpoint(t *testing.T) {
 	m.BytesFromNode.Store(4096)
 	m.RecordMessage(metrics.MessageRecord{Type: "mesh_packet", PortNum: "TEXT_MESSAGE_APP", Size: 50})
 
+	// Add a node with signal data so per-node RSSI/SNR metrics appear.
+	m.SetNodeDirectory(map[uint32]metrics.NodeEntry{
+		0x12345678: {ShortName: "TST1", LongName: "Test Node 1", RxRssi: -95, RxSnr: 8.5},
+	})
+
 	promRegistry := metrics.NewPrometheusRegistry(m)
 	promHandler := newPromHTTPHandler(promRegistry)
 
@@ -672,6 +677,8 @@ func TestPrometheusMetrics_Endpoint(t *testing.T) {
 		"meshtastic_proxy_bytes_from_node_total 4096",
 		"meshtastic_proxy_info{node_address=\"10.10.0.3:4403\"} 1",
 		"meshtastic_proxy_messages_total{port_num=\"TEXT_MESSAGE_APP\"} 1",
+		`meshtastic_proxy_node_rssi_dbm{node_num="305419896",short_name="TST1"} -95`,
+		`meshtastic_proxy_node_snr_db{node_num="305419896",short_name="TST1"} 8.5`,
 		"go_goroutines",
 	}
 
