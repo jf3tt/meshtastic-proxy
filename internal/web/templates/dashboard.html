@@ -202,6 +202,20 @@
             transition: all 0.15s; line-height: 1;
         }
         .na-btn:hover { color: #e5e7eb; background: rgba(55,65,81,0.5); border-color: #374151; }
+        .na-trace-btn {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 26px; height: 24px; border-radius: 6px;
+            background: transparent; border: 1px solid transparent;
+            color: #06b6d4; cursor: pointer; font-size: 11px; font-weight: 600;
+            transition: all 0.15s; line-height: 1; padding: 0;
+        }
+        .na-trace-btn:hover { background: rgba(6,182,212,0.15); border-color: rgba(6,182,212,0.3); }
+        .na-trace-btn:disabled { opacity: 0.5; cursor: not-allowed; color: #6b7280; }
+        .na-trace-btn .spinner {
+            display: inline-block; width: 12px; height: 12px;
+            border: 2px solid rgba(6,182,212,0.3); border-top-color: #06b6d4;
+            border-radius: 50%; animation: np-spin 0.6s linear infinite;
+        }
         .na-dropdown {
             position: absolute; right: 0; top: 100%; z-index: 50;
             min-width: 180px; margin-top: 2px;
@@ -1425,13 +1439,21 @@
             // ── Trace Route button ──
             h += '<div class="np-section" style="text-align:center;">';
             const tracing = pendingTraceroute !== null;
+            const cooling = traceCooldown !== null;
             const tracingThis = tracing && pendingTraceroute.target === parseInt(nodeNum);
-            h += '<button class="np-trace-btn" id="trace-btn-' + nodeNum + '"'
-               + (tracing ? ' disabled' : '')
+            const coolingThis = cooling && traceCooldown.target === parseInt(nodeNum);
+            h += '<button class="np-trace-btn" data-trace-target="' + nodeNum + '"'
+               + ((tracing || cooling) ? ' disabled' : '')
                + ' onclick="startTraceroute(' + nodeNum + ')">';
-            h += '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px;">';
-            h += '<circle cx="12" cy="12" r="10"/><line x1="22" y1="12" x2="18" y2="12"/><line x1="6" y1="12" x2="2" y2="12"/><line x1="12" y1="6" x2="12" y2="2"/><line x1="12" y1="22" x2="12" y2="18"/></svg>';
-            h += tracingThis ? 'Tracing…<span class="spinner"></span>' : tracing ? 'Trace busy' : 'Trace Route';
+            if (coolingThis) {
+                h += traceCooldown.remaining + 's';
+            } else if (tracingThis) {
+                h += traceBtnSVG + 'Tracing…<span class="spinner"></span>';
+            } else if (tracing || cooling) {
+                h += traceBtnSVG + 'Trace busy';
+            } else {
+                h += traceBtnSVG + 'Trace Route';
+            }
             h += '</button>';
             h += '</div>';
 
@@ -1692,22 +1714,36 @@
             }
         }
 
-        function startCooldown(nodeNum) {
-            var remaining = 30;
-            var btn = document.getElementById('trace-btn-' + nodeNum);
-            if (btn) {
+        // SVG icons for trace buttons (popup = with text, compact = icon-only for nodes table)
+        var traceBtnSVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px;">'
+            + '<circle cx="12" cy="12" r="10"/><line x1="22" y1="12" x2="18" y2="12"/><line x1="6" y1="12" x2="2" y2="12"/><line x1="12" y1="6" x2="12" y2="2"/><line x1="12" y1="22" x2="12" y2="18"/></svg>';
+        var traceBtnSVGCompact = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+            + '<circle cx="12" cy="12" r="10"/><line x1="22" y1="12" x2="18" y2="12"/><line x1="6" y1="12" x2="2" y2="12"/><line x1="12" y1="6" x2="12" y2="2"/><line x1="12" y1="22" x2="12" y2="18"/></svg>';
+
+        // Find all trace buttons for a given node (map popup + nodes table)
+        function findTraceBtns(nodeNum) {
+            return document.querySelectorAll('[data-trace-target="' + nodeNum + '"]');
+        }
+
+        function startCooldown(nodeNum, startedAt) {
+            var elapsed = startedAt ? Math.floor((Date.now() - startedAt) / 1000) : 0;
+            var remaining = Math.max(30 - elapsed, 0);
+            if (remaining <= 0) { resetTraceBtn(nodeNum); return; }
+            var btns = findTraceBtns(nodeNum);
+            btns.forEach(function(btn) {
                 btn.disabled = true;
-                const sp = btn.querySelector('.spinner');
-                if (sp) sp.remove();
-                btn.textContent = remaining + 's';
                 btn.style.color = '#6b7280';
-            }
+                btn.innerHTML = btn.classList.contains('na-trace-btn') ? remaining + 's' : remaining + 's';
+            });
             traceCooldown = {
                 target: nodeNum,
                 remaining: remaining,
                 interval: setInterval(function() {
                     remaining--;
-                    if (btn) btn.textContent = remaining + 's';
+                    traceCooldown.remaining = remaining;
+                    findTraceBtns(nodeNum).forEach(function(btn) {
+                        btn.innerHTML = remaining + 's';
+                    });
                     if (remaining <= 0) {
                         clearInterval(traceCooldown.interval);
                         traceCooldown = null;
@@ -1718,12 +1754,35 @@
         }
 
         function resetTraceBtn(nodeNum) {
-            const btn = document.getElementById('trace-btn-' + nodeNum);
-            if (!btn) return;
-            btn.disabled = false;
-            const spinner = btn.querySelector('.spinner');
-            if (spinner) spinner.remove();
+            findTraceBtns(nodeNum).forEach(function(btn) {
+                btn.disabled = false;
+                btn.style.color = '';
+                if (btn.classList.contains('na-trace-btn')) {
+                    btn.innerHTML = traceBtnSVGCompact;
+                } else {
+                    btn.innerHTML = traceBtnSVG + 'Trace Route';
+                }
+            });
         }
+
+        // Expose trace state so other IIFEs (nodeAction, renderNodesTable) can
+        // check it without direct access to the let-scoped variables.
+        window.isTraceActive = function() {
+            return pendingTraceroute !== null || traceCooldown !== null;
+        };
+        window.getTraceState = function(nodeNum) {
+            var num = parseInt(nodeNum);
+            var active = pendingTraceroute !== null || traceCooldown !== null;
+            var tracingThis = pendingTraceroute !== null && pendingTraceroute.target === num;
+            var coolingThis = traceCooldown !== null && traceCooldown.target === num;
+            return {
+                active: active,
+                tracingThis: tracingThis,
+                coolingThis: coolingThis,
+                remaining: coolingThis ? traceCooldown.remaining : 0,
+            };
+        };
+        window.traceBtnSVGCompact = traceBtnSVGCompact;
 
         window.startTraceroute = function(nodeNum) {
             // Guard: ignore if a traceroute is already in flight or cooldown active
@@ -1733,17 +1792,32 @@
             // Clear previous route
             clearTraceRoute();
 
-            // Set button to loading state
-            const btn = document.getElementById('trace-btn-' + nodeNum);
-            if (btn) {
+            // Set all trace buttons to loading state
+            findTraceBtns(nodeNum).forEach(function(btn) {
                 btn.disabled = true;
-                // Add spinner if not already present
                 if (!btn.querySelector('.spinner')) {
-                    const sp = document.createElement('span');
+                    var sp = document.createElement('span');
                     sp.className = 'spinner';
                     btn.appendChild(sp);
                 }
-            }
+            });
+
+            // Set pending state and timeout BEFORE fetch so guards work immediately
+            const timer = setTimeout(function() {
+                // Add "no response" entry to trace history
+                appendTraceHistory({
+                    from: pendingTraceroute ? pendingTraceroute.target : nodeNum,
+                    to: 0,
+                    route: [],
+                    timeout: true,
+                    timestamp: new Date().toISOString(),
+                });
+                var sa = pendingTraceroute ? pendingTraceroute.startedAt : null;
+                pendingTraceroute = null;
+                startCooldown(nodeNum, sa);
+            }, 30000);
+
+            pendingTraceroute = {target: nodeNum, timer: timer, startedAt: Date.now()};
 
             // Send traceroute request
             fetch('/api/traceroute', {
@@ -1752,24 +1826,12 @@
                 body: JSON.stringify({target: nodeNum}),
             }).catch(function(err) {
                 console.error('Traceroute request failed:', err);
+                if (pendingTraceroute) {
+                    clearTimeout(pendingTraceroute.timer);
+                    pendingTraceroute = null;
+                }
                 resetTraceBtn(nodeNum);
             });
-
-            // Set timeout (30s)
-            const timer = setTimeout(function() {
-                // Add "no response" entry to trace history
-                appendTraceHistory({
-                    from: pendingTraceroute.target,
-                    to: 0,
-                    route: [],
-                    timeout: true,
-                    timestamp: new Date().toISOString(),
-                });
-                pendingTraceroute = null;
-                startCooldown(nodeNum);
-            }, 30000);
-
-            pendingTraceroute = {target: nodeNum, timer: timer};
         }
 
         window.handleTracerouteResult = function(data) {
@@ -1782,8 +1844,9 @@
 
             clearTimeout(pendingTraceroute.timer);
             var target = pendingTraceroute.target;
+            var sa = pendingTraceroute.startedAt;
             pendingTraceroute = null;
-            startCooldown(target);
+            startCooldown(target, sa);
 
             drawTraceroute(data);
         }
@@ -2900,8 +2963,21 @@
                 coordCell = '<span class="text-gray-600">&mdash;</span>';
             }
 
-            // Actions
-            var actionsCell = '<div style="position:relative;">'
+            // Actions (trace button + ⋮ menu)
+            var ts = getTraceState(numStr);
+            var traceBtnContent;
+            if (ts.coolingThis) {
+                traceBtnContent = ts.remaining + 's';
+            } else if (ts.tracingThis) {
+                traceBtnContent = '<span class="spinner"></span>';
+            } else {
+                traceBtnContent = traceBtnSVGCompact;
+            }
+            var actionsCell = '<div style="position:relative;display:flex;align-items:center;gap:2px;">'
+                + '<button class="na-trace-btn" data-trace-target="' + numStr + '"'
+                + (ts.active ? ' disabled' : '')
+                + ' onclick="event.stopPropagation();startTraceroute(' + numStr + ')" title="Trace Route">'
+                + traceBtnContent + '</button>'
                 + '<button class="na-btn" onclick="event.stopPropagation();toggleNodeActions(\'' + numStr + '\',this)" title="Actions">&#8942;</button>'
                 + '</div>';
 
@@ -2966,9 +3042,6 @@
             var dd = document.createElement('div');
             dd.className = 'na-dropdown';
             dd.innerHTML = ''
-                + '<div class="na-item" onclick="nodeAction(\'traceroute\',' + num + ')">'
-                + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="22" y1="12" x2="18" y2="12"/><line x1="6" y1="12" x2="2" y2="12"/><line x1="12" y1="6" x2="12" y2="2"/><line x1="12" y1="22" x2="12" y2="18"/></svg>'
-                + 'Trace Route</div>'
                 + '<div class="na-item" onclick="nodeAction(\'position\',' + num + ')">'
                 + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>'
                 + 'Request Position</div>'
@@ -3004,10 +3077,6 @@
             var entry = nodeDir ? nodeDir[numStr] : null;
 
             switch (action) {
-                case 'traceroute':
-                    if (traceCooldown) return;
-                    startTraceroute(nodeNum);
-                    break;
                 case 'position':
                     fetch('/api/request-position', {
                         method: 'POST',
