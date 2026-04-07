@@ -8,6 +8,14 @@ import (
 	"time"
 )
 
+// nowUnix32 returns the current Unix timestamp as uint32.
+// Safe until year 2106; gosec G115 flags the int64→uint32 narrowing,
+// but Unix timestamps are always positive and fit in uint32 for the
+// foreseeable future.
+func nowUnix32() uint32 {
+	return uint32(time.Now().Unix()) //nolint:gosec // G115: unix timestamp fits uint32 until 2106
+}
+
 // NodeEntry stores all known information about a single mesh node.
 type NodeEntry struct {
 	// Identity (from NodeInfo.User)
@@ -400,7 +408,7 @@ func (m *Metrics) UpdateNodePosition(update PositionUpdate) {
 	}
 	entry := m.nodeDir[update.NodeNum]
 	entry.SeenRealtime = true
-	entry.LastHeard = uint32(time.Now().Unix())
+	entry.LastHeard = nowUnix32()
 	entry.Latitude = update.Latitude
 	entry.Longitude = update.Longitude
 	entry.Altitude = update.Altitude
@@ -435,7 +443,7 @@ func (m *Metrics) UpdateNodeTelemetry(update TelemetryUpdate) {
 	}
 	entry := m.nodeDir[update.NodeNum]
 	entry.SeenRealtime = true
-	entry.LastHeard = uint32(time.Now().Unix())
+	entry.LastHeard = nowUnix32()
 
 	// Device metrics
 	if update.BatteryLevel > 0 {
@@ -485,7 +493,7 @@ func (m *Metrics) UpdateNodeSignal(update SignalUpdate) {
 	}
 	entry := m.nodeDir[update.NodeNum]
 	entry.SeenRealtime = true
-	entry.LastHeard = uint32(time.Now().Unix())
+	entry.LastHeard = nowUnix32()
 
 	if update.RxRssi != 0 {
 		entry.RxRssi = update.RxRssi
@@ -517,7 +525,7 @@ func (m *Metrics) UpsertNode(update NodeInfoUpdate) {
 	entry, exists := m.nodeDir[update.NodeNum]
 	update.IsNew = !exists
 	entry.SeenRealtime = true
-	entry.LastHeard = uint32(time.Now().Unix())
+	entry.LastHeard = nowUnix32()
 
 	// Update identity fields
 	if update.ShortName != "" {
