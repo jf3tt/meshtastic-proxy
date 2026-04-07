@@ -10,7 +10,7 @@ A TCP proxy for [Meshtastic](https://meshtastic.org/) LoRa mesh radio nodes. Con
 - **Cached config replay** — node configuration is cached on first connect and delivered instantly to new clients, eliminating slow re-reads from the radio
 - **iOS two-phase config** — supports special firmware nonces (`69420`/`69421`) used by the iOS Meshtastic app for split config + node database loading
 - **mDNS advertisement** — advertises as `_meshtastic._tcp` so Meshtastic apps auto-discover the proxy on the local network
-- **Web dashboard** — real-time traffic graphs, message types breakdown, connected clients list, node map with RSSI/SNR heat map overlay, mesh chat with channel support, traceroute to nodes, and recent message log via SSE
+- **Web dashboard** — real-time traffic graphs, message types breakdown, connected clients list, node map with RSSI/SNR heat map overlay, mesh chat with channel support, traceroute with per-hop SNR and route history, node actions (request position, nodeinfo, favorite), and recent message log via SSE
 - **Prometheus metrics** — `/metrics` endpoint exposing proxy traffic, connection reliability, mesh node counts, per-node RSSI and SNR, and message breakdowns by port type, plus Go runtime and process metrics
 - **Grafana dashboard** — pre-built JSON dashboard with overview stats, traffic rates, message type distribution, RF signal quality (RSSI/SNR per node), connection reliability, and Go runtime panels
 - **Kubernetes-ready** — manifests for `hostNetwork` deployment with mDNS on bare-metal clusters
