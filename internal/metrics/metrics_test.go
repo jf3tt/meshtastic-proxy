@@ -1337,3 +1337,73 @@ func TestSeenRealtime_PreservedAcrossUpdates(t *testing.T) {
 		t.Error("node 0x22 should remain SeenRealtime=false")
 	}
 }
+
+// ── LastHeard is refreshed on real-time updates ──
+
+func TestLastHeard_UpdateNodePosition(t *testing.T) {
+	m := New(10, 300)
+	m.SetNodeDirectory(map[uint32]NodeEntry{
+		0x11: {ShortName: "A", LastHeard: 1000},
+	})
+
+	m.UpdateNodePosition(PositionUpdate{NodeNum: 0x11, Latitude: 55.75, Longitude: 37.62})
+
+	entry := m.NodeDirectory()[0x11]
+	if entry.LastHeard <= 1000 {
+		t.Errorf("LastHeard should be refreshed to ~now, got %d", entry.LastHeard)
+	}
+}
+
+func TestLastHeard_UpdateNodeTelemetry(t *testing.T) {
+	m := New(10, 300)
+	m.SetNodeDirectory(map[uint32]NodeEntry{
+		0x11: {ShortName: "A", LastHeard: 1000},
+	})
+
+	m.UpdateNodeTelemetry(TelemetryUpdate{NodeNum: 0x11, BatteryLevel: 85})
+
+	entry := m.NodeDirectory()[0x11]
+	if entry.LastHeard <= 1000 {
+		t.Errorf("LastHeard should be refreshed to ~now, got %d", entry.LastHeard)
+	}
+}
+
+func TestLastHeard_UpdateNodeSignal(t *testing.T) {
+	m := New(10, 300)
+	m.SetNodeDirectory(map[uint32]NodeEntry{
+		0x11: {ShortName: "A", LastHeard: 1000},
+	})
+
+	m.UpdateNodeSignal(SignalUpdate{NodeNum: 0x11, RxRssi: -95, RxSnr: 6.5})
+
+	entry := m.NodeDirectory()[0x11]
+	if entry.LastHeard <= 1000 {
+		t.Errorf("LastHeard should be refreshed to ~now, got %d", entry.LastHeard)
+	}
+}
+
+func TestLastHeard_UpsertNode(t *testing.T) {
+	m := New(10, 300)
+	m.SetNodeDirectory(map[uint32]NodeEntry{
+		0x11: {ShortName: "A", LastHeard: 1000},
+	})
+
+	m.UpsertNode(NodeInfoUpdate{NodeNum: 0x11, ShortName: "A2"})
+
+	entry := m.NodeDirectory()[0x11]
+	if entry.LastHeard <= 1000 {
+		t.Errorf("LastHeard should be refreshed to ~now, got %d", entry.LastHeard)
+	}
+}
+
+func TestLastHeard_NotUpdatedBySetNodeDirectory(t *testing.T) {
+	m := New(10, 300)
+	m.SetNodeDirectory(map[uint32]NodeEntry{
+		0x11: {ShortName: "A", LastHeard: 1000},
+	})
+
+	entry := m.NodeDirectory()[0x11]
+	if entry.LastHeard != 1000 {
+		t.Errorf("SetNodeDirectory should preserve original LastHeard, got %d", entry.LastHeard)
+	}
+}

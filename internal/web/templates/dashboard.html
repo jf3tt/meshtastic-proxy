@@ -1455,6 +1455,7 @@
                 if (pos.sats_in_view) nodeDir[numStr].sats_in_view = pos.sats_in_view;
                 if (pos.position_time) nodeDir[numStr].position_time = pos.position_time;
                 nodeDir[numStr].seen_realtime = true;
+                nodeDir[numStr].last_heard = Math.floor(Date.now() / 1000);
             } else {
                 nodeDir[numStr] = {
                     short_name: pos.short_name,
@@ -1467,6 +1468,7 @@
                     sats_in_view: pos.sats_in_view || 0,
                     position_time: pos.position_time || 0,
                     seen_realtime: true,
+                    last_heard: Math.floor(Date.now() / 1000),
                 };
             }
 
@@ -1502,6 +1504,7 @@
             }
             const entry = nodeDir[numStr];
             entry.seen_realtime = true;
+            entry.last_heard = Math.floor(Date.now() / 1000);
 
             // Device metrics
             if (tel.battery_level) entry.battery_level = tel.battery_level;
@@ -1537,6 +1540,7 @@
             }
             const entry = nodeDir[numStr];
             entry.seen_realtime = true;
+            entry.last_heard = Math.floor(Date.now() / 1000);
 
             if (sig.rx_rssi) entry.rx_rssi = sig.rx_rssi;
             if (sig.rx_snr) entry.rx_snr = sig.rx_snr;
@@ -1563,6 +1567,7 @@
             }
             const entry = nodeDir[numStr];
             entry.seen_realtime = true;
+            entry.last_heard = Math.floor(Date.now() / 1000);
 
             // Update identity fields
             if (info.short_name) entry.short_name = info.short_name;
