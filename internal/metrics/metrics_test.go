@@ -1231,3 +1231,109 @@ func TestRecordChatMessage_PublishesSSE(t *testing.T) {
 		t.Fatal("did not receive SSE event")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// SeenRealtime tests
+// ---------------------------------------------------------------------------
+
+func TestSeenRealtime_SetNodeDirectory_DoesNotSetFlag(t *testing.T) {
+	m := New(10, 300)
+	m.SetNodeDirectory(map[uint32]NodeEntry{
+		0x11: {ShortName: "A", LongName: "Alpha"},
+		0x22: {ShortName: "B", LongName: "Beta"},
+	})
+
+	dir := m.NodeDirectory()
+	for num, entry := range dir {
+		if entry.SeenRealtime {
+			t.Errorf("node %08x: SeenRealtime should be false after SetNodeDirectory", num)
+		}
+	}
+}
+
+func TestSeenRealtime_UpdateNodePosition(t *testing.T) {
+	m := New(10, 300)
+	m.SetNodeDirectory(map[uint32]NodeEntry{
+		0x11: {ShortName: "A"},
+	})
+
+	m.UpdateNodePosition(PositionUpdate{NodeNum: 0x11, Latitude: 55.75, Longitude: 37.62})
+
+	entry := m.NodeDirectory()[0x11]
+	if !entry.SeenRealtime {
+		t.Error("SeenRealtime should be true after UpdateNodePosition")
+	}
+}
+
+func TestSeenRealtime_UpdateNodeTelemetry(t *testing.T) {
+	m := New(10, 300)
+	m.SetNodeDirectory(map[uint32]NodeEntry{
+		0x11: {ShortName: "A"},
+	})
+
+	m.UpdateNodeTelemetry(TelemetryUpdate{NodeNum: 0x11, BatteryLevel: 85})
+
+	entry := m.NodeDirectory()[0x11]
+	if !entry.SeenRealtime {
+		t.Error("SeenRealtime should be true after UpdateNodeTelemetry")
+	}
+}
+
+func TestSeenRealtime_UpdateNodeSignal(t *testing.T) {
+	m := New(10, 300)
+	m.SetNodeDirectory(map[uint32]NodeEntry{
+		0x11: {ShortName: "A"},
+	})
+
+	m.UpdateNodeSignal(SignalUpdate{NodeNum: 0x11, RxRssi: -95, RxSnr: 6.5})
+
+	entry := m.NodeDirectory()[0x11]
+	if !entry.SeenRealtime {
+		t.Error("SeenRealtime should be true after UpdateNodeSignal")
+	}
+}
+
+func TestSeenRealtime_UpsertNode(t *testing.T) {
+	m := New(10, 300)
+	m.SetNodeDirectory(map[uint32]NodeEntry{
+		0x11: {ShortName: "A"},
+	})
+
+	m.UpsertNode(NodeInfoUpdate{NodeNum: 0x11, ShortName: "A2"})
+
+	entry := m.NodeDirectory()[0x11]
+	if !entry.SeenRealtime {
+		t.Error("SeenRealtime should be true after UpsertNode")
+	}
+}
+
+func TestSeenRealtime_NewNodeViaUpsert(t *testing.T) {
+	m := New(10, 300)
+
+	// No SetNodeDirectory — brand new node discovered in real time
+	m.UpsertNode(NodeInfoUpdate{NodeNum: 0x99, ShortName: "New"})
+
+	entry := m.NodeDirectory()[0x99]
+	if !entry.SeenRealtime {
+		t.Error("SeenRealtime should be true for newly discovered node via UpsertNode")
+	}
+}
+
+func TestSeenRealtime_PreservedAcrossUpdates(t *testing.T) {
+	m := New(10, 300)
+	m.SetNodeDirectory(map[uint32]NodeEntry{
+		0x11: {ShortName: "A"},
+		0x22: {ShortName: "B"},
+	})
+
+	// Only node 0x11 sends a real-time packet
+	m.UpdateNodeSignal(SignalUpdate{NodeNum: 0x11, RxRssi: -90})
+
+	dir := m.NodeDirectory()
+	if !dir[0x11].SeenRealtime {
+		t.Error("node 0x11 should be SeenRealtime=true")
+	}
+	if dir[0x22].SeenRealtime {
+		t.Error("node 0x22 should remain SeenRealtime=false")
+	}
+}

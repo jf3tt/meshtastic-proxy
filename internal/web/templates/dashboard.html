@@ -140,6 +140,59 @@
         .hm-legend-title { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.6px; color: #6b7280; margin-bottom: 4px; }
         .hm-legend-bar { width: 160px; height: 10px; border-radius: 5px; }
         .hm-legend-labels { display: flex; justify-content: space-between; font-size: 9px; color: #6b7280; margin-top: 2px; }
+        /* Nodes tab */
+        .nodes-th {
+            text-align: left; font-size: 10px; font-weight: 600; text-transform: uppercase;
+            letter-spacing: 0.05em; color: #6b7280; padding: 8px 12px;
+            border-bottom: 1px solid #1f2937; white-space: nowrap; user-select: none;
+        }
+        .nodes-th:hover { color: #9ca3af; }
+        .nodes-sort-icon { display: inline-block; width: 12px; margin-left: 2px; font-size: 10px; color: #4b5563; }
+        .nodes-sort-icon.asc::after { content: '\25B2'; }
+        .nodes-sort-icon.desc::after { content: '\25BC'; }
+        .nodes-td {
+            padding: 6px 12px; border-bottom: 1px solid rgba(31,41,55,0.5);
+            white-space: nowrap; font-size: 12px;
+        }
+        .nodes-rt-dot {
+            display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+            background: #34d399; box-shadow: 0 0 4px rgba(52,211,153,0.5);
+            margin-right: 4px; vertical-align: middle;
+        }
+        .nodes-battery-bar {
+            display: inline-block; width: 40px; height: 6px; border-radius: 3px;
+            background: #1f2937; vertical-align: middle; margin-right: 4px; overflow: hidden;
+        }
+        .nodes-battery-fill { display: block; height: 100%; border-radius: 3px; }
+        /* Node filters panel */
+        .nf-toggle-btn {
+            display: inline-flex; align-items: center; gap: 4px; position: relative;
+            padding: 4px 10px; border-radius: 6px;
+            font-size: 10px; font-weight: 600; color: #9ca3af;
+            background: transparent; border: 1px solid #374151;
+            cursor: pointer; transition: all 0.15s; white-space: nowrap;
+        }
+        .nf-toggle-btn:hover { color: #e5e7eb; border-color: #4b5563; }
+        .nf-toggle-btn.active { color: #60a5fa; border-color: rgba(96,165,250,0.4); background: rgba(96,165,250,0.08); }
+        .nf-active-dot {
+            position: absolute; top: -2px; right: -2px;
+            width: 6px; height: 6px; border-radius: 50%;
+            background: #60a5fa; box-shadow: 0 0 4px rgba(96,165,250,0.6);
+        }
+        .nf-panel { backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+        .nf-group-title { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.6px; color: #4b5563; margin-bottom: 4px; }
+        .nf-option { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: #d1d5db; cursor: pointer; white-space: nowrap; }
+        .nf-option input[type="radio"], .nf-option input[type="checkbox"] {
+            accent-color: #60a5fa; width: 12px; height: 12px; margin: 0; cursor: pointer;
+        }
+        .nf-option:hover { color: #f3f4f6; }
+        .nf-reset {
+            padding: 3px 10px; background: transparent;
+            border: 1px solid #374151; border-radius: 6px;
+            font-size: 10px; font-weight: 600; color: #6b7280; cursor: pointer;
+            text-transform: uppercase; letter-spacing: 0.5px; transition: all 0.15s;
+        }
+        .nf-reset:hover { border-color: #4b5563; color: #9ca3af; }
     </style>
 </head>
 <body class="bg-gray-950 text-gray-100 min-h-screen font-sans">
@@ -170,6 +223,10 @@
                 <button id="tab-btn-chat" onclick="switchTab('chat')"
                     class="tab-btn text-xs font-semibold px-3 py-1 rounded-md transition-colors text-gray-400 hover:text-gray-200">
                     Chat
+                </button>
+                <button id="tab-btn-nodes" onclick="switchTab('nodes')"
+                    class="tab-btn text-xs font-semibold px-3 py-1 rounded-md transition-colors text-gray-400 hover:text-gray-200">
+                    Nodes
                 </button>
             </nav>
 
@@ -515,6 +572,131 @@
             </div>
         </div><!-- end tab-chat -->
 
+        <!-- ==================== NODES TAB ==================== -->
+        <div id="tab-nodes" class="hidden">
+            <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden" style="height: calc(100vh - 140px); display: flex; flex-direction: column;">
+
+                <!-- Header bar -->
+                <div class="flex items-center gap-3 px-4 py-3 border-b border-gray-800 bg-gray-950/60 flex-shrink-0">
+                    <!-- Toggle: All / Realtime -->
+                    <div class="flex items-center bg-gray-800 rounded-lg p-0.5 border border-gray-700">
+                        <button id="nodes-filter-all" onclick="setNodesFilter('all')"
+                            class="nodes-filter-btn text-[10px] font-semibold px-2.5 py-1 rounded-md transition-colors bg-gray-700 text-gray-100">
+                            All
+                        </button>
+                        <button id="nodes-filter-realtime" onclick="setNodesFilter('realtime')"
+                            class="nodes-filter-btn text-[10px] font-semibold px-2.5 py-1 rounded-md transition-colors text-gray-400 hover:text-gray-200">
+                            Realtime only
+                        </button>
+                    </div>
+
+                    <!-- Search -->
+                    <div class="relative flex-1 max-w-xs">
+                        <svg class="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500 pointer-events-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                        <input id="nodes-search" type="text" placeholder="Search nodes..."
+                            class="w-full bg-gray-800 border border-gray-700 rounded-lg pl-8 pr-3 py-1 text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:border-indigo-500/50">
+                    </div>
+
+                    <!-- Counters -->
+                    <span id="nodes-count" class="text-xs text-gray-500 ml-auto tabular-nums">0 nodes</span>
+
+                    <!-- Filters toggle -->
+                    <button id="nodes-filters-btn" onclick="toggleNodesFilters()" class="nf-toggle-btn">
+                        <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+                        <span>Filters</span>
+                        <span id="nodes-filters-dot" class="nf-active-dot hidden"></span>
+                    </button>
+                </div>
+
+                <!-- Collapsible filters panel -->
+                <div id="nodes-filters-panel" class="hidden nf-panel border-b border-gray-800 bg-gray-950/80 flex-shrink-0">
+                    <div class="flex flex-wrap gap-6 px-4 py-3">
+
+                        <!-- MQTT filter -->
+                        <div>
+                            <div class="nf-group-title">MQTT</div>
+                            <div class="flex items-center gap-3">
+                                <label class="nf-option"><input type="radio" name="nf-mqtt" value="all" checked onchange="setNodesFilterMqtt('all')"> All</label>
+                                <label class="nf-option"><input type="radio" name="nf-mqtt" value="direct" onchange="setNodesFilterMqtt('direct')"> Direct</label>
+                                <label class="nf-option"><input type="radio" name="nf-mqtt" value="mqtt" onchange="setNodesFilterMqtt('mqtt')"> MQTT</label>
+                            </div>
+                        </div>
+
+                        <!-- Position filter -->
+                        <div>
+                            <div class="nf-group-title">Position</div>
+                            <div class="flex items-center gap-3">
+                                <label class="nf-option"><input type="radio" name="nf-pos" value="all" checked onchange="setNodesFilterPosition('all')"> All</label>
+                                <label class="nf-option"><input type="radio" name="nf-pos" value="gps" onchange="setNodesFilterPosition('gps')"> With GPS</label>
+                            </div>
+                        </div>
+
+                        <!-- Role filter (dynamic checkboxes) -->
+                        <div>
+                            <div class="nf-group-title">Role</div>
+                            <div id="nf-role-checks" class="flex flex-wrap items-center gap-x-3 gap-y-1"></div>
+                        </div>
+
+                        <!-- Reset -->
+                        <div class="flex items-end ml-auto">
+                            <button onclick="resetNodesFilters()" class="nf-reset">Reset All</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Table -->
+                <div id="nodes-table-wrap" class="flex-1 min-h-0 overflow-y-auto overflow-x-auto">
+                    <table class="w-full text-sm min-w-[1200px]">
+                        <thead class="sticky top-0 bg-gray-900 z-10">
+                            <tr>
+                                <th class="nodes-th cursor-pointer" data-sort="short_name">
+                                    <span>Name</span><span class="nodes-sort-icon"></span>
+                                </th>
+                                <th class="nodes-th cursor-pointer" data-sort="user_id">
+                                    <span>ID</span><span class="nodes-sort-icon"></span>
+                                </th>
+                                <th class="nodes-th cursor-pointer" data-sort="hw_model">
+                                    <span>Hardware</span><span class="nodes-sort-icon"></span>
+                                </th>
+                                <th class="nodes-th cursor-pointer" data-sort="role">
+                                    <span>Role</span><span class="nodes-sort-icon"></span>
+                                </th>
+                                <th class="nodes-th cursor-pointer" data-sort="last_heard">
+                                    <span>Last Heard</span><span class="nodes-sort-icon"></span>
+                                </th>
+                                <th class="nodes-th cursor-pointer" data-sort="hops_away">
+                                    <span>Hops</span><span class="nodes-sort-icon"></span>
+                                </th>
+                                <th class="nodes-th cursor-pointer" data-sort="rx_rssi">
+                                    <span>RSSI</span><span class="nodes-sort-icon"></span>
+                                </th>
+                                <th class="nodes-th cursor-pointer" data-sort="rx_snr">
+                                    <span>SNR</span><span class="nodes-sort-icon"></span>
+                                </th>
+                                <th class="nodes-th cursor-pointer" data-sort="battery_level">
+                                    <span>Battery</span><span class="nodes-sort-icon"></span>
+                                </th>
+                                <th class="nodes-th" style="cursor:default;">
+                                    <span>Coordinates</span>
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody id="nodes-tbody"></tbody>
+                    </table>
+                    <!-- Empty state (inside scroll container so it doesn't compete for flex space) -->
+                    <div id="nodes-empty" class="hidden" style="padding: 80px 0; text-align: center;">
+                        <div class="text-center text-gray-500">
+                            <svg class="mx-auto mb-2 w-12 h-12 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/>
+                            </svg>
+                            <p class="text-sm font-medium">No nodes discovered yet</p>
+                            <p class="text-xs mt-1">Nodes will appear as the proxy receives data from the mesh</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div><!-- end tab-nodes -->
+
         <!-- Footer -->
         <footer class="mt-8 pt-4 border-t border-gray-800 text-center text-xs text-gray-600">
             Meshtastic TCP Proxy &mdash; real-time via SSE
@@ -528,6 +710,7 @@
             document.getElementById('tab-dashboard').classList.add('hidden');
             document.getElementById('tab-map').classList.add('hidden');
             document.getElementById('tab-chat').classList.add('hidden');
+            document.getElementById('tab-nodes').classList.add('hidden');
 
             // Deactivate all tab buttons
             document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -552,6 +735,11 @@
             if (tabName === 'chat') {
                 initChat();
                 scrollChatToBottom();
+            }
+
+            // Render nodes table on first show
+            if (tabName === 'nodes') {
+                initNodesTab();
             }
         }
 
@@ -1266,6 +1454,7 @@
                 if (pos.ground_track) nodeDir[numStr].ground_track = pos.ground_track;
                 if (pos.sats_in_view) nodeDir[numStr].sats_in_view = pos.sats_in_view;
                 if (pos.position_time) nodeDir[numStr].position_time = pos.position_time;
+                nodeDir[numStr].seen_realtime = true;
             } else {
                 nodeDir[numStr] = {
                     short_name: pos.short_name,
@@ -1277,6 +1466,7 @@
                     ground_track: pos.ground_track || 0,
                     sats_in_view: pos.sats_in_view || 0,
                     position_time: pos.position_time || 0,
+                    seen_realtime: true,
                 };
             }
 
@@ -1311,6 +1501,7 @@
                 nodeDir[numStr] = { short_name: tel.short_name, long_name: tel.long_name };
             }
             const entry = nodeDir[numStr];
+            entry.seen_realtime = true;
 
             // Device metrics
             if (tel.battery_level) entry.battery_level = tel.battery_level;
@@ -1345,6 +1536,7 @@
                 nodeDir[numStr] = { short_name: sig.short_name, long_name: sig.long_name };
             }
             const entry = nodeDir[numStr];
+            entry.seen_realtime = true;
 
             if (sig.rx_rssi) entry.rx_rssi = sig.rx_rssi;
             if (sig.rx_snr) entry.rx_snr = sig.rx_snr;
@@ -1370,6 +1562,7 @@
                 nodeDir[numStr] = {};
             }
             const entry = nodeDir[numStr];
+            entry.seen_realtime = true;
 
             // Update identity fields
             if (info.short_name) entry.short_name = info.short_name;
@@ -2217,6 +2410,466 @@
             }
         });
         chatSendBtn.addEventListener('click', sendMessage);
+    })();
+    </script>
+
+    <!-- ==================== NODES JAVASCRIPT ==================== -->
+    <script>
+    (function() {
+        'use strict';
+
+        let nodesInitialized = false;
+        let nodesFilterMode = 'all'; // 'all' or 'realtime'
+        let nodesFilterMqtt = 'all'; // 'all', 'direct', 'mqtt'
+        let nodesFilterPosition = 'all'; // 'all', 'gps'
+        let nodesFilterRoles = new Set(); // empty = show all roles
+        let nodesFiltersOpen = false;
+        let nodesSortKey = 'short_name';
+        let nodesSortDir = 'asc'; // 'asc' or 'desc'
+
+        const nodesSearch = document.getElementById('nodes-search');
+        const nodesTbody = document.getElementById('nodes-tbody');
+        const nodesCount = document.getElementById('nodes-count');
+        const nodesEmpty = document.getElementById('nodes-empty');
+
+        // ── Initialize nodes tab ──
+        window.initNodesTab = function() {
+            if (nodesInitialized) {
+                renderNodesTable();
+                return;
+            }
+            nodesInitialized = true;
+
+            // Attach sort handlers
+            document.querySelectorAll('.nodes-th[data-sort]').forEach(function(th) {
+                th.addEventListener('click', function() {
+                    var key = th.dataset.sort;
+                    if (nodesSortKey === key) {
+                        nodesSortDir = nodesSortDir === 'asc' ? 'desc' : 'asc';
+                    } else {
+                        nodesSortKey = key;
+                        nodesSortDir = 'asc';
+                    }
+                    updateSortIcons();
+                    renderNodesTable();
+                });
+            });
+
+            nodesSearch.addEventListener('input', renderNodesTable);
+
+            updateSortIcons();
+            if (nodesFiltersOpen) buildRoleCheckboxes();
+            renderNodesTable();
+        };
+
+        // ── Filter toggle ──
+        window.setNodesFilter = function(mode) {
+            nodesFilterMode = mode;
+            var btnAll = document.getElementById('nodes-filter-all');
+            var btnRT = document.getElementById('nodes-filter-realtime');
+            if (mode === 'all') {
+                btnAll.className = 'nodes-filter-btn text-[10px] font-semibold px-2.5 py-1 rounded-md transition-colors bg-gray-700 text-gray-100';
+                btnRT.className = 'nodes-filter-btn text-[10px] font-semibold px-2.5 py-1 rounded-md transition-colors text-gray-400 hover:text-gray-200';
+            } else {
+                btnRT.className = 'nodes-filter-btn text-[10px] font-semibold px-2.5 py-1 rounded-md transition-colors bg-gray-700 text-gray-100';
+                btnAll.className = 'nodes-filter-btn text-[10px] font-semibold px-2.5 py-1 rounded-md transition-colors text-gray-400 hover:text-gray-200';
+            }
+            renderNodesTable();
+        };
+
+        // ── Filters panel ──
+        window.toggleNodesFilters = function() {
+            nodesFiltersOpen = !nodesFiltersOpen;
+            var panel = document.getElementById('nodes-filters-panel');
+            var btn = document.getElementById('nodes-filters-btn');
+            if (nodesFiltersOpen) {
+                panel.classList.remove('hidden');
+                btn.classList.add('active');
+                buildRoleCheckboxes();
+            } else {
+                panel.classList.add('hidden');
+                btn.classList.remove('active');
+            }
+        };
+
+        window.setNodesFilterMqtt = function(val) {
+            nodesFilterMqtt = val;
+            updateFiltersIndicator();
+            renderNodesTable();
+        };
+
+        window.setNodesFilterPosition = function(val) {
+            nodesFilterPosition = val;
+            updateFiltersIndicator();
+            renderNodesTable();
+        };
+
+        function handleRoleCheckbox(role, checked) {
+            if (checked) {
+                nodesFilterRoles.add(role);
+            } else {
+                nodesFilterRoles.delete(role);
+            }
+            updateFiltersIndicator();
+            renderNodesTable();
+        }
+
+        window.resetNodesFilters = function() {
+            nodesFilterMqtt = 'all';
+            nodesFilterPosition = 'all';
+            nodesFilterRoles.clear();
+            // Reset radio buttons
+            var mqttAll = document.querySelector('input[name="nf-mqtt"][value="all"]');
+            var posAll = document.querySelector('input[name="nf-pos"][value="all"]');
+            if (mqttAll) mqttAll.checked = true;
+            if (posAll) posAll.checked = true;
+            // Uncheck all role checkboxes
+            document.querySelectorAll('#nf-role-checks input[type="checkbox"]').forEach(function(cb) {
+                cb.checked = false;
+            });
+            updateFiltersIndicator();
+            renderNodesTable();
+        };
+
+        function buildRoleCheckboxes() {
+            var container = document.getElementById('nf-role-checks');
+            if (!container || !nodeDir) return;
+            // Collect unique roles
+            var roles = {};
+            for (var numStr in nodeDir) {
+                if (!nodeDir.hasOwnProperty(numStr)) continue;
+                var r = nodeDir[numStr].role || '';
+                if (r) roles[r] = (roles[r] || 0) + 1;
+            }
+            var sortedRoles = Object.keys(roles).sort();
+            if (sortedRoles.length === 0) {
+                container.innerHTML = '<span class="text-[10px] text-gray-600">No roles</span>';
+                return;
+            }
+            var html = '';
+            for (var i = 0; i < sortedRoles.length; i++) {
+                var role = sortedRoles[i];
+                var checked = nodesFilterRoles.has(role) ? ' checked' : '';
+                var label = role.charAt(0).toUpperCase() + role.slice(1).toLowerCase().replace(/_/g, ' ');
+                html += '<label class="nf-option"><input type="checkbox" value="' + role + '"'
+                    + checked + ' onchange="handleNfRole(this)"> '
+                    + label + ' <span class="text-[10px] text-gray-600">(' + roles[role] + ')</span></label>';
+            }
+            container.innerHTML = html;
+        }
+
+        // Global handler for role checkboxes (called from onclick in dynamic HTML)
+        window.handleNfRole = function(cb) {
+            handleRoleCheckbox(cb.value, cb.checked);
+        };
+
+        function updateFiltersIndicator() {
+            var dot = document.getElementById('nodes-filters-dot');
+            if (!dot) return;
+            var active = nodesFilterMqtt !== 'all' || nodesFilterPosition !== 'all' || nodesFilterRoles.size > 0;
+            if (active) {
+                dot.classList.remove('hidden');
+            } else {
+                dot.classList.add('hidden');
+            }
+        }
+
+        // ── Sort icons ──
+        function updateSortIcons() {
+            document.querySelectorAll('.nodes-sort-icon').forEach(function(icon) {
+                icon.className = 'nodes-sort-icon';
+            });
+            var activeTh = document.querySelector('.nodes-th[data-sort="' + nodesSortKey + '"] .nodes-sort-icon');
+            if (activeTh) {
+                activeTh.classList.add(nodesSortDir);
+            }
+        }
+
+        // ── Render table ──
+        window.renderNodesTable = function() {
+            if (!nodeDir) {
+                nodesEmpty.classList.remove('hidden');
+                nodesCount.textContent = '0 nodes';
+                return;
+            }
+
+            var searchTerm = (nodesSearch.value || '').toLowerCase().trim();
+
+            // Collect entries
+            var entries = [];
+            for (var numStr in nodeDir) {
+                if (!nodeDir.hasOwnProperty(numStr)) continue;
+                var entry = nodeDir[numStr];
+                var num = parseInt(numStr, 10);
+
+                // Filter: realtime only
+                if (nodesFilterMode === 'realtime' && !entry.seen_realtime) continue;
+
+                // Filter: MQTT
+                if (nodesFilterMqtt === 'direct' && entry.via_mqtt) continue;
+                if (nodesFilterMqtt === 'mqtt' && !entry.via_mqtt) continue;
+
+                // Filter: Position
+                if (nodesFilterPosition === 'gps' && !entry.latitude && !entry.longitude) continue;
+
+                // Filter: Role
+                if (nodesFilterRoles.size > 0 && !nodesFilterRoles.has(entry.role || '')) continue;
+
+                // Filter: search
+                if (searchTerm) {
+                    var hex = '!' + ('00000000' + (num >>> 0).toString(16)).slice(-8);
+                    var haystack = ((entry.short_name || '') + ' ' + (entry.long_name || '') + ' ' + hex + ' ' + (entry.user_id || '') + ' ' + (entry.hw_model || '') + ' ' + (entry.role || '')).toLowerCase();
+                    if (haystack.indexOf(searchTerm) === -1) continue;
+                }
+
+                entries.push({num: num, numStr: numStr, entry: entry});
+            }
+
+            // Sort — favorites always pinned to the top
+            entries.sort(function(a, b) {
+                var fa = a.entry.is_favorite ? 0 : 1;
+                var fb = b.entry.is_favorite ? 0 : 1;
+                if (fa !== fb) return fa - fb;
+                var va = getSortValue(a.entry, a.num, nodesSortKey);
+                var vb = getSortValue(b.entry, b.num, nodesSortKey);
+                var cmp;
+                if (typeof va === 'number' && typeof vb === 'number') {
+                    cmp = va - vb;
+                } else {
+                    cmp = String(va).localeCompare(String(vb));
+                }
+                return nodesSortDir === 'desc' ? -cmp : cmp;
+            });
+
+            // Build HTML
+            var html = '';
+            for (var i = 0; i < entries.length; i++) {
+                html += buildNodeRow(entries[i].num, entries[i].numStr, entries[i].entry);
+            }
+
+            nodesTbody.innerHTML = html;
+
+            // Counter
+            var totalNodes = Object.keys(nodeDir).length;
+            var hasFilters = nodesFilterMode !== 'all' || nodesFilterMqtt !== 'all' || nodesFilterPosition !== 'all' || nodesFilterRoles.size > 0 || searchTerm;
+            var suffix = nodesFilterMode === 'realtime' ? ' realtime' : '';
+            nodesCount.textContent = entries.length + (hasFilters ? ' / ' + totalNodes : '') + ' nodes' + suffix;
+
+            // Empty state
+            if (entries.length === 0) {
+                nodesEmpty.classList.remove('hidden');
+            } else {
+                nodesEmpty.classList.add('hidden');
+            }
+        };
+
+        function getSortValue(entry, num, key) {
+            switch (key) {
+                case 'short_name': return (entry.short_name || '').toLowerCase() || '!' + num.toString(16);
+                case 'user_id': return entry.user_id || '!' + ('00000000' + (num >>> 0).toString(16)).slice(-8);
+                case 'hw_model': return (entry.hw_model || '').toLowerCase();
+                case 'role': return (entry.role || '').toLowerCase();
+                case 'last_heard': return entry.last_heard || 0;
+                case 'hops_away': return entry.hops_away || 9999;
+                case 'rx_rssi': return entry.rx_rssi || -999;
+                case 'rx_snr': return entry.rx_snr || entry.snr || -999;
+                case 'battery_level': return entry.battery_level || -1;
+                default: return '';
+            }
+        }
+
+        function buildNodeRow(num, numStr, entry) {
+            var hex = '!' + ('00000000' + (num >>> 0).toString(16)).slice(-8);
+            var rt = entry.seen_realtime;
+
+            // Name
+            var nameCell = '';
+            if (rt) nameCell += '<span class="nodes-rt-dot" title="Seen in real-time"></span>';
+            if (entry.short_name) {
+                nameCell += '<span class="font-semibold text-gray-100" title="' + escN(entry.long_name || '') + '">' + escN(entry.short_name) + '</span>';
+                if (entry.long_name && entry.long_name !== entry.short_name) {
+                    nameCell += ' <span class="text-gray-500 text-[11px]">' + escN(entry.long_name) + '</span>';
+                }
+            } else {
+                nameCell += '<code class="font-mono text-xs text-gray-400">' + escN(hex) + '</code>';
+            }
+
+            // Badges
+            if (entry.is_licensed) nameCell += ' <span class="text-[9px] font-bold px-1 py-px rounded bg-amber-500/15 text-amber-400 border border-amber-500/30">HAM</span>';
+            if (entry.via_mqtt) nameCell += ' <span class="text-[9px] font-bold px-1 py-px rounded bg-purple-500/15 text-purple-400 border border-purple-500/30">MQTT</span>';
+            if (entry.is_favorite) nameCell += ' <span class="text-[9px] font-bold px-1 py-px rounded bg-pink-500/15 text-pink-400 border border-pink-500/30">FAV</span>';
+
+            // ID
+            var idCell = '<code class="font-mono text-[11px] text-gray-400">' + escN(entry.user_id || hex) + '</code>';
+
+            // Hardware
+            var hwCell = entry.hw_model ? '<span class="text-gray-300">' + escN(fmtHw(entry.hw_model)) + '</span>' : '<span class="text-gray-600">&mdash;</span>';
+
+            // Role
+            var roleCell = entry.role ? '<span class="text-gray-300">' + escN(fmtRole(entry.role)) + '</span>' : '<span class="text-gray-600">&mdash;</span>';
+
+            // Last heard
+            var lhCell;
+            if (entry.last_heard) {
+                var now = Math.floor(Date.now() / 1000);
+                var age = now - entry.last_heard;
+                var online = age < 900;
+                var ageStr = fmtAge(entry.last_heard);
+                var color = online ? 'text-emerald-400' : (age < 3600 ? 'text-gray-300' : 'text-gray-500');
+                lhCell = '<span class="' + color + ' tabular-nums">' + ageStr + '</span>';
+            } else {
+                lhCell = '<span class="text-gray-600">&mdash;</span>';
+            }
+
+            // Hops
+            var hopsCell = (entry.hops_away !== undefined && entry.hops_away > 0)
+                ? '<code class="font-mono text-xs text-gray-300">' + entry.hops_away + '</code>'
+                : '<span class="text-gray-600">&mdash;</span>';
+
+            // RSSI
+            var rssiCell;
+            if (entry.rx_rssi) {
+                var rssiColor = entry.rx_rssi > -90 ? 'text-emerald-400' : (entry.rx_rssi > -110 ? 'text-amber-400' : 'text-red-400');
+                rssiCell = '<code class="font-mono text-xs ' + rssiColor + '">' + entry.rx_rssi + '</code>';
+            } else {
+                rssiCell = '<span class="text-gray-600">&mdash;</span>';
+            }
+
+            // SNR
+            var snrVal = entry.rx_snr || entry.snr;
+            var snrCell;
+            if (snrVal) {
+                var snrColor = snrVal > 5 ? 'text-emerald-400' : (snrVal > 0 ? 'text-amber-400' : 'text-red-400');
+                snrCell = '<code class="font-mono text-xs ' + snrColor + '">' + snrVal.toFixed(1) + '</code>';
+            } else {
+                snrCell = '<span class="text-gray-600">&mdash;</span>';
+            }
+
+            // Battery
+            var battCell;
+            if (entry.battery_level) {
+                var pct = Math.min(entry.battery_level, 100);
+                var bColor = pct > 50 ? '#34d399' : (pct > 20 ? '#fbbf24' : '#f87171');
+                battCell = '<span class="nodes-battery-bar"><span class="nodes-battery-fill" style="width:' + pct + '%;background:' + bColor + '"></span></span>'
+                    + '<span class="text-xs tabular-nums text-gray-300">' + pct + '%</span>';
+                if (entry.voltage) {
+                    battCell += ' <span class="text-[10px] text-gray-500">' + entry.voltage.toFixed(1) + 'V</span>';
+                }
+            } else {
+                battCell = '<span class="text-gray-600">&mdash;</span>';
+            }
+
+            // Coordinates
+            var coordCell;
+            if (entry.latitude || entry.longitude) {
+                coordCell = '<code class="font-mono text-[11px] text-gray-300">'
+                    + entry.latitude.toFixed(5) + ', ' + entry.longitude.toFixed(5) + '</code>';
+                if (entry.altitude) {
+                    coordCell += ' <span class="text-[10px] text-gray-500">' + entry.altitude + 'm</span>';
+                }
+            } else {
+                coordCell = '<span class="text-gray-600">&mdash;</span>';
+            }
+
+            return '<tr class="hover:bg-gray-800/30 transition-colors" data-nodenum="' + numStr + '">'
+                + '<td class="nodes-td">' + nameCell + '</td>'
+                + '<td class="nodes-td">' + idCell + '</td>'
+                + '<td class="nodes-td">' + hwCell + '</td>'
+                + '<td class="nodes-td">' + roleCell + '</td>'
+                + '<td class="nodes-td">' + lhCell + '</td>'
+                + '<td class="nodes-td text-center">' + hopsCell + '</td>'
+                + '<td class="nodes-td text-right">' + rssiCell + '</td>'
+                + '<td class="nodes-td text-right">' + snrCell + '</td>'
+                + '<td class="nodes-td">' + battCell + '</td>'
+                + '<td class="nodes-td">' + coordCell + '</td>'
+                + '</tr>';
+        }
+
+        // ── Helpers ──
+        function escN(s) {
+            if (!s) return '';
+            var d = document.createElement('span');
+            d.textContent = s;
+            return d.innerHTML;
+        }
+
+        function fmtHw(m) {
+            if (!m) return '';
+            return m.replace(/_/g, ' ').replace(/\w\S*/g, function(t) {
+                return t.charAt(0).toUpperCase() + t.substr(1).toLowerCase();
+            });
+        }
+
+        function fmtRole(r) {
+            if (!r) return '';
+            return r.charAt(0).toUpperCase() + r.slice(1).toLowerCase().replace(/_/g, ' ');
+        }
+
+        function fmtAge(ts) {
+            if (!ts) return '';
+            var now = Math.floor(Date.now() / 1000);
+            var diff = now - ts;
+            if (diff < 0) return 'now';
+            if (diff < 60) return diff + 's ago';
+            if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+            if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+            return Math.floor(diff / 86400) + 'd ago';
+        }
+
+        // ── Periodic refresh: keep "Last Heard" relative times up-to-date ──
+        setInterval(function() {
+            if (nodesInitialized && !document.getElementById('tab-nodes').classList.contains('hidden')) {
+                renderNodesTable();
+            }
+        }, 30000);
+
+        // ── SSE integration: re-render when node data changes ──
+        // The main SSE handlers (node_directory, node_update, node_position_update,
+        // node_telemetry_update, node_signal_update) already update `nodeDir`.
+        // We just need to re-render the table if the nodes tab is visible.
+
+        // Patch existing SSE handlers to trigger nodes table refresh.
+        var origUpdateMapMarkers = window.updateMapMarkers;
+        window.updateMapMarkers = function() {
+            origUpdateMapMarkers();
+            if (nodesInitialized && !document.getElementById('tab-nodes').classList.contains('hidden')) {
+                if (nodesFiltersOpen) buildRoleCheckboxes();
+                renderNodesTable();
+            }
+        };
+
+        var origUpdateNodeInfo = window.updateNodeInfo;
+        window.updateNodeInfo = function(info) {
+            origUpdateNodeInfo(info);
+            if (nodesInitialized && !document.getElementById('tab-nodes').classList.contains('hidden')) {
+                if (nodesFiltersOpen && info.role) buildRoleCheckboxes();
+                renderNodesTable();
+            }
+        };
+
+        var origUpdateMapNode = window.updateMapNode;
+        window.updateMapNode = function(pos) {
+            origUpdateMapNode(pos);
+            if (nodesInitialized && !document.getElementById('tab-nodes').classList.contains('hidden')) {
+                renderNodesTable();
+            }
+        };
+
+        var origUpdateNodeTelemetry = window.updateNodeTelemetry;
+        window.updateNodeTelemetry = function(tel) {
+            origUpdateNodeTelemetry(tel);
+            if (nodesInitialized && !document.getElementById('tab-nodes').classList.contains('hidden')) {
+                renderNodesTable();
+            }
+        };
+
+        var origUpdateNodeSignal = window.updateNodeSignal;
+        window.updateNodeSignal = function(sig) {
+            origUpdateNodeSignal(sig);
+            if (nodesInitialized && !document.getElementById('tab-nodes').classList.contains('hidden')) {
+                renderNodesTable();
+            }
+        };
     })();
     </script>
 </body>

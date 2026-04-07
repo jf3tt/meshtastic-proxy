@@ -50,6 +50,12 @@ type NodeEntry struct {
 	// Signal quality (updated from incoming MeshPacket RxRssi/RxSnr)
 	RxRssi int32   `json:"rx_rssi,omitempty"` // RSSI at receiver (dBm, negative)
 	RxSnr  float32 `json:"rx_snr,omitempty"`  // SNR at receiver (dB)
+
+	// SeenRealtime is true if the proxy has received at least one real-time
+	// packet from this node (MeshPacket, NODEINFO_APP, POSITION_APP, etc.)
+	// after the initial config cache was populated. Nodes known only from the
+	// config cache will have this set to false.
+	SeenRealtime bool `json:"seen_realtime"`
 }
 
 // HasPosition returns true if the node has valid GPS coordinates.
@@ -393,6 +399,7 @@ func (m *Metrics) UpdateNodePosition(update PositionUpdate) {
 		m.nodeDir = make(map[uint32]NodeEntry)
 	}
 	entry := m.nodeDir[update.NodeNum]
+	entry.SeenRealtime = true
 	entry.Latitude = update.Latitude
 	entry.Longitude = update.Longitude
 	entry.Altitude = update.Altitude
@@ -426,6 +433,7 @@ func (m *Metrics) UpdateNodeTelemetry(update TelemetryUpdate) {
 		m.nodeDir = make(map[uint32]NodeEntry)
 	}
 	entry := m.nodeDir[update.NodeNum]
+	entry.SeenRealtime = true
 
 	// Device metrics
 	if update.BatteryLevel > 0 {
@@ -474,6 +482,7 @@ func (m *Metrics) UpdateNodeSignal(update SignalUpdate) {
 		m.nodeDir = make(map[uint32]NodeEntry)
 	}
 	entry := m.nodeDir[update.NodeNum]
+	entry.SeenRealtime = true
 
 	if update.RxRssi != 0 {
 		entry.RxRssi = update.RxRssi
@@ -504,6 +513,7 @@ func (m *Metrics) UpsertNode(update NodeInfoUpdate) {
 
 	entry, exists := m.nodeDir[update.NodeNum]
 	update.IsNew = !exists
+	entry.SeenRealtime = true
 
 	// Update identity fields
 	if update.ShortName != "" {
