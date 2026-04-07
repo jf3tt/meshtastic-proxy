@@ -643,10 +643,12 @@ func ExtractNodeInfo(payload []byte) *NodeInfoData {
 
 // TracerouteData holds the route discovered by a TRACEROUTE_APP response.
 type TracerouteData struct {
-	From      uint32   // who responded (target node)
-	To        uint32   // who requested (our node)
-	Route     []uint32 // forward hops (from requester toward target)
-	RouteBack []uint32 // return hops (from target back to requester)
+	From       uint32   // who responded (target node)
+	To         uint32   // who requested (our node)
+	Route      []uint32 // forward hops (from requester toward target)
+	RouteBack  []uint32 // return hops (from target back to requester)
+	SnrTowards []int32  // SNR (dB×4) at each forward hop
+	SnrBack    []int32  // SNR (dB×4) at each return hop
 }
 
 // ExtractTraceroute tries to extract a traceroute response from a FromRadio
@@ -673,10 +675,12 @@ func ExtractTraceroute(payload []byte) *TracerouteData {
 		return nil
 	}
 	return &TracerouteData{
-		From:      pkt.Packet.GetFrom(),
-		To:        pkt.Packet.GetTo(),
-		Route:     route.GetRoute(),
-		RouteBack: route.GetRouteBack(),
+		From:       pkt.Packet.GetFrom(),
+		To:         pkt.Packet.GetTo(),
+		Route:      route.GetRoute(),
+		RouteBack:  route.GetRouteBack(),
+		SnrTowards: route.GetSnrTowards(),
+		SnrBack:    route.GetSnrBack(),
 	}
 }
 

@@ -3334,3 +3334,85 @@ func TestBuildNodeInfoFrame_ProducesValidProtobuf(t *testing.T) {
 		t.Error("LastHeard = 0, want non-zero")
 	}
 }
+
+func TestExtractTraceroute_WithSnr(t *testing.T) {
+	routePayload, err := proto.Marshal(&pb.RouteDiscovery{
+		Route:      []uint32{0xCC, 0xDD},
+		SnrTowards: []int32{24, 12}, // 6.0 dB, 3.0 dB
+		RouteBack:  []uint32{0xEE},
+		SnrBack:    []int32{16}, // 4.0 dB
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From: 0xAA,
+				To:   0xBB,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum: pb.PortNum_TRACEROUTE_APP,
+						Payload: routePayload,
+					},
+				},
+			},
+		},
+	})
+
+	tr := ExtractTraceroute(payload)
+	if tr == nil {
+		t.Fatal("ExtractTraceroute returned nil")
+	}
+	if tr.From != 0xAA || tr.To != 0xBB {
+		t.Errorf("From/To = %x/%x, want AA/BB", tr.From, tr.To)
+	}
+	if len(tr.Route) != 2 || tr.Route[0] != 0xCC || tr.Route[1] != 0xDD {
+		t.Errorf("Route = %v, want [CC DD]", tr.Route)
+	}
+	if len(tr.SnrTowards) != 2 || tr.SnrTowards[0] != 24 || tr.SnrTowards[1] != 12 {
+		t.Errorf("SnrTowards = %v, want [24 12]", tr.SnrTowards)
+	}
+	if len(tr.RouteBack) != 1 || tr.RouteBack[0] != 0xEE {
+		t.Errorf("RouteBack = %v, want [EE]", tr.RouteBack)
+	}
+	if len(tr.SnrBack) != 1 || tr.SnrBack[0] != 16 {
+		t.Errorf("SnrBack = %v, want [16]", tr.SnrBack)
+	}
+}
+
+func TestExtractTraceroute_NoSnr(t *testing.T) {
+	routePayload, err := proto.Marshal(&pb.RouteDiscovery{
+		Route: []uint32{0xCC},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From: 0xAA,
+				To:   0xBB,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum: pb.PortNum_TRACEROUTE_APP,
+						Payload: routePayload,
+					},
+				},
+			},
+		},
+	})
+
+	tr := ExtractTraceroute(payload)
+	if tr == nil {
+		t.Fatal("ExtractTraceroute returned nil")
+	}
+	if len(tr.SnrTowards) != 0 {
+		t.Errorf("SnrTowards = %v, want empty", tr.SnrTowards)
+	}
+	if len(tr.SnrBack) != 0 {
+		t.Errorf("SnrBack = %v, want empty", tr.SnrBack)
+	}
+}

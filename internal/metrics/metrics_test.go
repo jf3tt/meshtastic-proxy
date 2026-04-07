@@ -1407,3 +1407,197 @@ func TestLastHeard_NotUpdatedBySetNodeDirectory(t *testing.T) {
 		t.Errorf("SetNodeDirectory should preserve original LastHeard, got %d", entry.LastHeard)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Traceroute history tests
+// ---------------------------------------------------------------------------
+
+func TestTraceHistory_EmptyByDefault(t *testing.T) {
+	m := New(10, 300)
+	h := m.TraceHistory()
+	if len(h) != 0 {
+		t.Errorf("expected empty trace history, got %d entries", len(h))
+	}
+}
+
+func TestPublishTraceroute_StoresInHistory(t *testing.T) {
+	m := New(10, 300)
+
+	m.PublishTraceroute(TracerouteUpdate{
+		From:       0xAABBCCDD,
+		To:         0x11223344,
+		Route:      []uint32{0x55667788},
+		SnrTowards: []int32{24}, // 6.0 dB (scaled by 4)
+	})
+
+	h := m.TraceHistory()
+	if len(h) != 1 {
+		t.Fatalf("expected 1 trace entry, got %d", len(h))
+	}
+	if h[0].From != 0xAABBCCDD {
+		t.Errorf("From = %d, want %d", h[0].From, uint32(0xAABBCCDD))
+	}
+	if h[0].To != 0x11223344 {
+		t.Errorf("To = %d, want %d", h[0].To, uint32(0x11223344))
+	}
+	if len(h[0].Route) != 1 || h[0].Route[0] != 0x55667788 {
+		t.Errorf("Route = %v, want [0x55667788]", h[0].Route)
+	}
+	if len(h[0].SnrTowards) != 1 || h[0].SnrTowards[0] != 24 {
+		t.Errorf("SnrTowards = %v, want [24]", h[0].SnrTowards)
+	}
+	if h[0].Timestamp.IsZero() {
+		t.Error("expected non-zero timestamp")
+	}
+}
+
+func TestPublishTraceroute_MultipleEntries(t *testing.T) {
+	m := New(10, 300)
+
+	for i := uint32(0); i < 5; i++ {
+		m.PublishTraceroute(TracerouteUpdate{From: i + 1, To: 1})
+	}
+
+	h := m.TraceHistory()
+	if len(h) != 5 {
+		t.Fatalf("expected 5 trace entries, got %d", len(h))
+	}
+	// Verify order (oldest first)
+	for i := 0; i < 5; i++ {
+		if h[i].From != uint32(i+1) {
+			t.Errorf("h[%d].From = %d, want %d", i, h[i].From, i+1)
+		}
+	}
+}
+
+func TestTraceHistory_RingBufferOverflow(t *testing.T) {
+	m := New(10, 300)
+	// maxTraceHistory = 100
+
+	for i := uint32(0); i < 110; i++ {
+		m.PublishTraceroute(TracerouteUpdate{From: i, To: 1})
+	}
+
+	h := m.TraceHistory()
+	if len(h) != 100 {
+		t.Fatalf("expected 100 trace entries (ring buffer limit), got %d", len(h))
+	}
+	// Oldest entry should be #10 (first 10 were evicted)
+	if h[0].From != 10 {
+		t.Errorf("oldest entry From = %d, want 10", h[0].From)
+	}
+	// Newest entry should be #109
+	if h[99].From != 109 {
+		t.Errorf("newest entry From = %d, want 109", h[99].From)
+	}
+}
+
+func TestTraceHistory_ReturnsCopy(t *testing.T) {
+	m := New(10, 300)
+	m.PublishTraceroute(TracerouteUpdate{From: 1, To: 2})
+
+	h1 := m.TraceHistory()
+	h1[0].From = 999
+
+	h2 := m.TraceHistory()
+	if h2[0].From != 1 {
+		t.Error("TraceHistory should return a copy, but modification was visible")
+	}
+}
+
+func TestPublishTraceroute_SSEEvent(t *testing.T) {
+	m := New(10, 300)
+	ch := m.Subscribe()
+	defer m.Unsubscribe(ch)
+
+	m.PublishTraceroute(TracerouteUpdate{From: 0xAA, To: 0xBB})
+
+	select {
+	case evt := <-ch:
+		if evt.Type != "traceroute_result" {
+			t.Errorf("event type = %q, want %q", evt.Type, "traceroute_result")
+		}
+		entry, ok := evt.Data.(TracerouteEntry)
+		if !ok {
+			t.Fatalf("expected TracerouteEntry, got %T", evt.Data)
+		}
+		if entry.From != 0xAA {
+			t.Errorf("From = %d, want %d", entry.From, 0xAA)
+		}
+	case <-time.After(time.Second):
+		t.Error("timed out waiting for traceroute_result SSE event")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SetFavorite tests
+// ---------------------------------------------------------------------------
+
+func TestSetFavorite_Success(t *testing.T) {
+	m := New(10, 300)
+	m.SetNodeDirectory(map[uint32]NodeEntry{
+		0x11: {ShortName: "A", IsFavorite: false},
+	})
+
+	ok := m.SetFavorite(0x11, true)
+	if !ok {
+		t.Error("SetFavorite returned false, expected true")
+	}
+
+	entry := m.NodeDirectory()[0x11]
+	if !entry.IsFavorite {
+		t.Error("expected IsFavorite=true after SetFavorite(true)")
+	}
+
+	// Toggle off
+	ok = m.SetFavorite(0x11, false)
+	if !ok {
+		t.Error("SetFavorite returned false, expected true")
+	}
+
+	entry = m.NodeDirectory()[0x11]
+	if entry.IsFavorite {
+		t.Error("expected IsFavorite=false after SetFavorite(false)")
+	}
+}
+
+func TestSetFavorite_NodeNotFound(t *testing.T) {
+	m := New(10, 300)
+	m.SetNodeDirectory(map[uint32]NodeEntry{
+		0x11: {ShortName: "A"},
+	})
+
+	ok := m.SetFavorite(0x99, true)
+	if ok {
+		t.Error("SetFavorite returned true for non-existent node, expected false")
+	}
+}
+
+func TestSetFavorite_PublishesSSE(t *testing.T) {
+	m := New(10, 300)
+
+	ch := m.Subscribe()
+	defer m.Unsubscribe(ch)
+
+	m.SetNodeDirectory(map[uint32]NodeEntry{
+		0x11: {ShortName: "A"},
+	})
+
+	// Drain node_directory event from SetNodeDirectory
+	select {
+	case <-ch:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for node_directory event")
+	}
+
+	m.SetFavorite(0x11, true)
+
+	select {
+	case evt := <-ch:
+		if evt.Type != "node_favorite" {
+			t.Errorf("event type = %q, want %q", evt.Type, "node_favorite")
+		}
+	case <-time.After(time.Second):
+		t.Error("timed out waiting for node_favorite SSE event")
+	}
+}

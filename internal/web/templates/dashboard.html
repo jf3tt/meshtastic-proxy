@@ -193,6 +193,57 @@
             text-transform: uppercase; letter-spacing: 0.5px; transition: all 0.15s;
         }
         .nf-reset:hover { border-color: #4b5563; color: #9ca3af; }
+        /* Node actions dropdown */
+        .na-btn {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 24px; height: 24px; border-radius: 6px;
+            background: transparent; border: 1px solid transparent;
+            color: #6b7280; cursor: pointer; font-size: 14px; font-weight: 700;
+            transition: all 0.15s; line-height: 1;
+        }
+        .na-btn:hover { color: #e5e7eb; background: rgba(55,65,81,0.5); border-color: #374151; }
+        .na-dropdown {
+            position: absolute; right: 0; top: 100%; z-index: 50;
+            min-width: 180px; margin-top: 2px;
+            background: #111827; border: 1px solid #374151; border-radius: 8px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.5); overflow: hidden;
+            backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+        }
+        .na-item {
+            display: flex; align-items: center; gap: 8px;
+            padding: 7px 12px; font-size: 11px; color: #d1d5db;
+            cursor: pointer; transition: all 0.1s; white-space: nowrap;
+        }
+        .na-item:hover { background: rgba(55,65,81,0.5); color: #f3f4f6; }
+        .na-item svg { flex-shrink: 0; width: 14px; height: 14px; }
+        .na-item.na-fav { color: #fb7185; }
+        .na-item.na-fav:hover { background: rgba(251,113,133,0.1); }
+        .na-sep { height: 1px; background: #1f2937; margin: 2px 0; }
+        /* Trace History panel */
+        .th-toggle-btn {
+            display: inline-flex; align-items: center; gap: 4px; position: relative;
+            padding: 4px 10px; border-radius: 6px;
+            font-size: 10px; font-weight: 600; color: #9ca3af;
+            background: transparent; border: 1px solid #374151;
+            cursor: pointer; transition: all 0.15s; white-space: nowrap;
+        }
+        .th-toggle-btn:hover { color: #e5e7eb; border-color: #4b5563; }
+        .th-toggle-btn.active { color: #06b6d4; border-color: rgba(6,182,212,0.4); background: rgba(6,182,212,0.08); }
+        .th-panel { backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+        .th-entry {
+            display: flex; align-items: center; gap: 8px;
+            padding: 6px 12px; font-size: 11px; color: #d1d5db;
+            cursor: pointer; transition: background 0.1s; border-bottom: 1px solid rgba(31,41,55,0.5);
+        }
+        .th-entry:hover { background: rgba(55,65,81,0.3); }
+        .th-entry:last-child { border-bottom: none; }
+        .th-time { color: #6b7280; font-variant-numeric: tabular-nums; min-width: 60px; flex-shrink: 0; }
+        .th-route { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; min-width: 0; }
+        .th-hop { color: #e5e7eb; font-weight: 500; }
+        .th-arrow { color: #4b5563; }
+        .th-hop-start { color: #34d399; }
+        .th-hop-end { color: #f59e0b; }
+        .th-hops-badge { font-size: 9px; color: #06b6d4; background: rgba(6,182,212,0.1); border: 1px solid rgba(6,182,212,0.2); padding: 0 5px; border-radius: 4px; margin-left: auto; flex-shrink: 0; }
     </style>
 </head>
 <body class="bg-gray-950 text-gray-100 min-h-screen font-sans">
@@ -606,6 +657,13 @@
                         <span>Filters</span>
                         <span id="nodes-filters-dot" class="nf-active-dot hidden"></span>
                     </button>
+
+                    <!-- Trace History toggle -->
+                    <button id="trace-history-btn" onclick="toggleTraceHistory()" class="th-toggle-btn">
+                        <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                        <span>Traces</span>
+                        <span id="trace-history-count" class="text-[9px] text-gray-500 tabular-nums"></span>
+                    </button>
                 </div>
 
                 <!-- Collapsible filters panel -->
@@ -644,6 +702,12 @@
                     </div>
                 </div>
 
+                <!-- Collapsible trace history panel -->
+                <div id="trace-history-panel" class="th-panel border-b border-gray-800 bg-gray-950/80 flex-shrink-0" style="display: none; max-height: 300px; overflow-y: auto;">
+                    <div id="trace-history-list"></div>
+                    <div id="trace-history-empty" style="text-align: center; color: #4b5563; font-size: 12px; padding: 24px 0;">No traceroutes yet</div>
+                </div>
+
                 <!-- Table -->
                 <div id="nodes-table-wrap" class="flex-1 min-h-0 overflow-y-auto overflow-x-auto">
                     <table class="w-full text-sm min-w-[1200px]">
@@ -678,6 +742,9 @@
                                 </th>
                                 <th class="nodes-th" style="cursor:default;">
                                     <span>Coordinates</span>
+                                </th>
+                                <th class="nodes-th" style="cursor:default; width:50px;">
+                                    <span></span>
                                 </th>
                             </tr>
                         </thead>
@@ -972,6 +1039,24 @@
             evtSource.addEventListener('traceroute_result', function(e) {
                 const data = JSON.parse(e.data);
                 handleTracerouteResult(data);
+                appendTraceHistory(data);
+            });
+
+            evtSource.addEventListener('trace_history', function(e) {
+                const data = JSON.parse(e.data);
+                loadTraceHistory(data);
+            });
+
+            evtSource.addEventListener('node_favorite', function(e) {
+                const data = JSON.parse(e.data);
+                if (nodeDir && data.node_num) {
+                    var numStr = data.node_num.toString();
+                    if (nodeDir[numStr]) {
+                        nodeDir[numStr].is_favorite = data.is_favorite;
+                        if (typeof renderNodesTable === 'function') renderNodesTable();
+                        if (typeof updateMapMarkers === 'function') updateMapMarkers();
+                    }
+                }
             });
 
             evtSource.addEventListener('chat_history', function(e) {
@@ -1216,6 +1301,7 @@
         let mapInitialized = false;
         let traceRouteLayer = null;  // L.layerGroup for current traceroute visualization
         let pendingTraceroute = null; // {target: nodeNum, timer: timeoutId} or null
+        let traceCooldown = null;     // {target: nodeNum, interval: id, remaining: int} or null
 
         // Expose initMap globally for tab switching
         window.initMap = function() {
@@ -1597,12 +1683,38 @@
             if (entry && entry.short_name) return entry.short_name;
             return '!' + num.toString(16).padStart(8, '0');
         }
+        window.nodeHexName = nodeHexName;
 
         function clearTraceRoute() {
             if (traceRouteLayer) {
                 mapInstance.removeLayer(traceRouteLayer);
                 traceRouteLayer = null;
             }
+        }
+
+        function startCooldown(nodeNum) {
+            var remaining = 30;
+            var btn = document.getElementById('trace-btn-' + nodeNum);
+            if (btn) {
+                btn.disabled = true;
+                const sp = btn.querySelector('.spinner');
+                if (sp) sp.remove();
+                btn.textContent = remaining + 's';
+                btn.style.color = '#6b7280';
+            }
+            traceCooldown = {
+                target: nodeNum,
+                remaining: remaining,
+                interval: setInterval(function() {
+                    remaining--;
+                    if (btn) btn.textContent = remaining + 's';
+                    if (remaining <= 0) {
+                        clearInterval(traceCooldown.interval);
+                        traceCooldown = null;
+                        resetTraceBtn(nodeNum);
+                    }
+                }, 1000),
+            };
         }
 
         function resetTraceBtn(nodeNum) {
@@ -1614,8 +1726,9 @@
         }
 
         window.startTraceroute = function(nodeNum) {
-            // Guard: ignore if a traceroute is already in flight
+            // Guard: ignore if a traceroute is already in flight or cooldown active
             if (pendingTraceroute) return;
+            if (traceCooldown) return;
 
             // Clear previous route
             clearTraceRoute();
@@ -1644,20 +1757,16 @@
 
             // Set timeout (30s)
             const timer = setTimeout(function() {
-                resetTraceBtn(nodeNum);
+                // Add "no response" entry to trace history
+                appendTraceHistory({
+                    from: pendingTraceroute.target,
+                    to: 0,
+                    route: [],
+                    timeout: true,
+                    timestamp: new Date().toISOString(),
+                });
                 pendingTraceroute = null;
-                // Brief "no response" flash on button
-                if (btn) {
-                    btn.textContent = 'No response';
-                    btn.style.color = '#f87171';
-                    setTimeout(function() {
-                        btn.textContent = '';
-                        btn.style.color = '';
-                        btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px;">'
-                            + '<circle cx="12" cy="12" r="10"/><line x1="22" y1="12" x2="18" y2="12"/><line x1="6" y1="12" x2="2" y2="12"/><line x1="12" y1="6" x2="12" y2="2"/><line x1="12" y1="22" x2="12" y2="18"/></svg>'
-                            + 'Trace Route';
-                    }, 2000);
-                }
+                startCooldown(nodeNum);
             }, 30000);
 
             pendingTraceroute = {target: nodeNum, timer: timer};
@@ -1672,8 +1781,9 @@
             if (!pendingTraceroute || pendingTraceroute.target !== data.from) return;
 
             clearTimeout(pendingTraceroute.timer);
-            resetTraceBtn(pendingTraceroute.target);
+            var target = pendingTraceroute.target;
             pendingTraceroute = null;
+            startCooldown(target);
 
             drawTraceroute(data);
         }
@@ -1719,8 +1829,16 @@
             // Build popup content for the route line
             let popupHtml = '<div style="font-size:12px;color:#e5e7eb;line-height:1.6;">';
             popupHtml += '<div style="font-weight:600;color:#06b6d4;margin-bottom:4px;">Trace Route</div>';
+            const snrFwd = data.snr_towards || [];
             for (let i = 0; i < hopNums.length; i++) {
-                if (i > 0) popupHtml += ' <span style="color:#4b5563;">→</span> ';
+                if (i > 0) {
+                    let snrTag = '';
+                    const snrIdx = i - 1;
+                    if (snrIdx < snrFwd.length && snrFwd[snrIdx] !== 0) {
+                        snrTag = ' <span style="color:#6b7280;font-size:10px;">' + (snrFwd[snrIdx] / 4).toFixed(1) + 'dB</span>';
+                    }
+                    popupHtml += ' <span style="color:#4b5563;">→</span>' + snrTag + ' ';
+                }
                 const name = nodeHexName(hopNums[i]);
                 if (i === 0) {
                     popupHtml += '<span style="color:#34d399;">' + esc(name) + '</span>';
@@ -1733,10 +1851,15 @@
             popupHtml += '<div style="color:#6b7280;margin-top:4px;font-size:11px;">'
                 + hopNums.length + ' nodes, ' + (hopNums.length - 1) + ' hop(s)</div>';
             if (data.route_back && data.route_back.length > 0) {
+                const snrBk = data.snr_back || [];
                 popupHtml += '<div style="color:#6b7280;font-size:11px;">Return: ';
                 popupHtml += esc(nodeHexName(data.from));
                 for (let i = 0; i < data.route_back.length; i++) {
-                    popupHtml += ' → ' + esc(nodeHexName(data.route_back[i]));
+                    let snrTag = '';
+                    if (i < snrBk.length && snrBk[i] !== 0) {
+                        snrTag = ' <span style="font-size:9px;">' + (snrBk[i] / 4).toFixed(1) + 'dB</span>';
+                    }
+                    popupHtml += ' →' + snrTag + ' ' + esc(nodeHexName(data.route_back[i]));
                 }
                 popupHtml += ' → ' + esc(nodeHexName(data.to));
                 popupHtml += '</div>';
@@ -1777,6 +1900,7 @@
             const bounds = L.latLngBounds(coords);
             mapInstance.fitBounds(bounds, {padding: [60, 60], maxZoom: 15});
         }
+        window.drawTraceroute = drawTraceroute;
 
         // ══════════════════════════════════════════════
         // ── Heatmap Layer ──
@@ -2776,6 +2900,11 @@
                 coordCell = '<span class="text-gray-600">&mdash;</span>';
             }
 
+            // Actions
+            var actionsCell = '<div style="position:relative;">'
+                + '<button class="na-btn" onclick="event.stopPropagation();toggleNodeActions(\'' + numStr + '\',this)" title="Actions">&#8942;</button>'
+                + '</div>';
+
             return '<tr class="hover:bg-gray-800/30 transition-colors" data-nodenum="' + numStr + '">'
                 + '<td class="nodes-td">' + nameCell + '</td>'
                 + '<td class="nodes-td">' + idCell + '</td>'
@@ -2787,6 +2916,7 @@
                 + '<td class="nodes-td text-right">' + snrCell + '</td>'
                 + '<td class="nodes-td">' + battCell + '</td>'
                 + '<td class="nodes-td">' + coordCell + '</td>'
+                + '<td class="nodes-td">' + actionsCell + '</td>'
                 + '</tr>';
         }
 
@@ -2820,6 +2950,260 @@
             if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
             return Math.floor(diff / 86400) + 'd ago';
         }
+
+        // ── Node Actions dropdown ──
+        var activeDropdown = null;
+
+        window.toggleNodeActions = function(numStr, btnEl) {
+            // Close any existing dropdown
+            closeNodeActions();
+
+            var num = parseInt(numStr, 10);
+            var entry = nodeDir ? nodeDir[numStr] : {};
+            var favLabel = (entry && entry.is_favorite) ? 'Remove Favorite' : 'Add Favorite';
+            var favIcon = '<svg viewBox="0 0 24 24" fill="' + (entry && entry.is_favorite ? 'currentColor' : 'none') + '" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>';
+
+            var dd = document.createElement('div');
+            dd.className = 'na-dropdown';
+            dd.innerHTML = ''
+                + '<div class="na-item" onclick="nodeAction(\'traceroute\',' + num + ')">'
+                + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="22" y1="12" x2="18" y2="12"/><line x1="6" y1="12" x2="2" y2="12"/><line x1="12" y1="6" x2="12" y2="2"/><line x1="12" y1="22" x2="12" y2="18"/></svg>'
+                + 'Trace Route</div>'
+                + '<div class="na-item" onclick="nodeAction(\'position\',' + num + ')">'
+                + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>'
+                + 'Request Position</div>'
+                + '<div class="na-item" onclick="nodeAction(\'nodeinfo\',' + num + ')">'
+                + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>'
+                + 'Request NodeInfo</div>'
+                + '<div class="na-item" onclick="nodeAction(\'storeforward\',' + num + ')">'
+                + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>'
+                + 'Store &amp; Forward</div>'
+                + '<div class="na-sep"></div>'
+                + '<div class="na-item na-fav" onclick="nodeAction(\'favorite\',' + num + ')">'
+                + favIcon + favLabel + '</div>';
+
+            btnEl.parentElement.appendChild(dd);
+            activeDropdown = dd;
+
+            // Close on outside click (deferred so this click doesn't close it)
+            setTimeout(function() {
+                document.addEventListener('click', closeNodeActions, {once: true});
+            }, 0);
+        };
+
+        function closeNodeActions() {
+            if (activeDropdown) {
+                activeDropdown.remove();
+                activeDropdown = null;
+            }
+        }
+
+        window.nodeAction = function(action, nodeNum) {
+            closeNodeActions();
+            var numStr = nodeNum.toString();
+            var entry = nodeDir ? nodeDir[numStr] : null;
+
+            switch (action) {
+                case 'traceroute':
+                    if (traceCooldown) return;
+                    startTraceroute(nodeNum);
+                    break;
+                case 'position':
+                    fetch('/api/request-position', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({target: nodeNum}),
+                    }).then(function(r) {
+                        if (!r.ok) throw new Error('Request failed');
+                    }).catch(function(err) { console.error('Position request failed:', err); });
+                    break;
+                case 'nodeinfo':
+                    fetch('/api/request-nodeinfo', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({target: nodeNum}),
+                    }).then(function(r) {
+                        if (!r.ok) throw new Error('Request failed');
+                    }).catch(function(err) { console.error('NodeInfo request failed:', err); });
+                    break;
+                case 'storeforward':
+                    fetch('/api/store-forward', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({target: nodeNum}),
+                    }).then(function(r) {
+                        if (!r.ok) throw new Error('Request failed');
+                    }).catch(function(err) { console.error('Store & Forward request failed:', err); });
+                    break;
+                case 'favorite':
+                    var newFav = !(entry && entry.is_favorite);
+                    fetch('/api/favorite', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({node_num: nodeNum, is_favorite: newFav}),
+                    }).then(function(r) {
+                        if (!r.ok) throw new Error('Request failed');
+                        // Optimistic update
+                        if (nodeDir && nodeDir[numStr]) {
+                            nodeDir[numStr].is_favorite = newFav;
+                            renderNodesTable();
+                        }
+                    }).catch(function(err) { console.error('Favorite toggle failed:', err); });
+                    break;
+            }
+        };
+
+        // ── Trace History panel ──
+        var traceHistoryOpen = false;
+        var traceHistoryData = [];
+
+        window.toggleTraceHistory = function() {
+            var panel = document.getElementById('trace-history-panel');
+            var btn = document.getElementById('trace-history-btn');
+            traceHistoryOpen = !traceHistoryOpen;
+            if (traceHistoryOpen) {
+                panel.style.display = '';
+                btn.classList.add('active');
+            } else {
+                panel.style.display = 'none';
+                btn.classList.remove('active');
+            }
+        };
+
+        function renderTraceHistory() {
+            var list = document.getElementById('trace-history-list');
+            var empty = document.getElementById('trace-history-empty');
+            var countEl = document.getElementById('trace-history-count');
+
+            if (!traceHistoryData || traceHistoryData.length === 0) {
+                list.innerHTML = '';
+                empty.style.display = '';
+                if (countEl) countEl.textContent = '';
+                return;
+            }
+
+            empty.style.display = 'none';
+            if (countEl) countEl.textContent = '(' + traceHistoryData.length + ')';
+
+            // Render newest first
+            var html = '';
+            for (var i = traceHistoryData.length - 1; i >= 0; i--) {
+                var t = traceHistoryData[i];
+                var ts = t.timestamp ? new Date(t.timestamp) : new Date();
+                var timeStr = ts.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+
+                // Timeout entry: show target node + "No response" badge
+                if (t.timeout) {
+                    var targetName = escN(window.nodeHexName(t.from));
+                    html += '<div class="th-entry">'
+                        + '<span class="th-time">' + timeStr + '</span>'
+                        + '<span class="th-route">'
+                        + '<span class="th-hop th-hop-end">' + targetName + '</span>'
+                        + '<span class="th-hops-badge" style="color:#f87171;border-color:rgba(248,113,113,0.3);background:rgba(248,113,113,0.08);">No response</span>'
+                        + '</span></div>';
+                    continue;
+                }
+
+                // Build forward hop chain: to → route[0] → ... → from
+                var hops = [t.to];
+                var routeLen = t.route ? t.route.length : 0;
+                if (t.route) { for (var j = 0; j < t.route.length; j++) hops.push(t.route[j]); }
+                hops.push(t.from);
+
+                // snr_towards[k] is the SNR at which route[k] received the packet.
+                var snr = t.snr_towards || [];
+
+                var routeHtml = '';
+                for (var k = 0; k < hops.length; k++) {
+                    if (k > 0) {
+                        routeHtml += '<span class="th-arrow">&rarr;</span>';
+                    }
+                    var titleAttr = '';
+                    if (k > 0) {
+                        var snrIdx = k - 1;
+                        if (snrIdx < snr.length && snr[snrIdx] !== 0) {
+                            titleAttr = ' title="SNR: ' + (snr[snrIdx] / 4).toFixed(1) + ' dB"';
+                        }
+                    }
+                    var cls = k === 0 ? 'th-hop th-hop-start' : (k === hops.length - 1 ? 'th-hop th-hop-end' : 'th-hop');
+                    routeHtml += '<span class="' + cls + '"' + titleAttr + '>' + escN(window.nodeHexName(hops[k])) + '</span>';
+                }
+
+                var hopCount = hops.length - 1;
+                routeHtml += '<span class="th-hops-badge">' + hopCount + ' hop' + (hopCount !== 1 ? 's' : '') + '</span>';
+
+                html += '<div class="th-entry" onclick="showTraceOnMap(' + i + ')">'
+                    + '<span class="th-time">' + timeStr + '</span>'
+                    + '<span class="th-route">' + routeHtml + '</span>'
+                    + '</div>';
+
+                // Return route: from → route_back[0] → ... → to (displayed reversed)
+                if (t.route_back && t.route_back.length > 0) {
+                    var backHops = [t.from];
+                    for (var j = 0; j < t.route_back.length; j++) backHops.push(t.route_back[j]);
+                    backHops.push(t.to);
+                    var snrB = t.snr_back || [];
+
+                    var backHtml = '';
+                    for (var k = backHops.length - 1; k >= 0; k--) {
+                        if (k < backHops.length - 1) {
+                            backHtml += '<span class="th-arrow">&larr;</span>';
+                        }
+                        var titleAttr = '';
+                        // snr_back[j] corresponds to route_back[j]; in backHops: index j+1
+                        // reversed display: backHops[k] where k=backHops.length-1 is to (start), k=0 is from (end)
+                        // backHops[k] for 1 <= k <= route_back.length maps to route_back[k-1] / snr_back[k-1]
+                        if (k >= 1 && k <= t.route_back.length) {
+                            var sIdx = k - 1;
+                            if (sIdx < snrB.length && snrB[sIdx] !== 0) {
+                                titleAttr = ' title="SNR: ' + (snrB[sIdx] / 4).toFixed(1) + ' dB"';
+                            }
+                        }
+                        var cls = k === backHops.length - 1 ? 'th-hop th-hop-start' : (k === 0 ? 'th-hop th-hop-end' : 'th-hop');
+                        backHtml += '<span class="' + cls + '"' + titleAttr + '>' + escN(window.nodeHexName(backHops[k])) + '</span>';
+                    }
+                    backHtml += '<span class="th-hops-badge" style="color:#6b7280;border-color:rgba(107,114,128,0.2);background:rgba(107,114,128,0.1);">return</span>';
+
+                    html += '<div class="th-entry" onclick="showTraceOnMap(' + i + ')" style="padding-top:0;border-bottom-width:0;">'
+                        + '<span class="th-time"></span>'
+                        + '<span class="th-route" style="opacity:0.6;">' + backHtml + '</span>'
+                        + '</div>';
+                }
+            }
+            list.innerHTML = html;
+        }
+
+        window.showTraceOnMap = function(idx) {
+            if (idx < 0 || idx >= traceHistoryData.length) return;
+            drawTraceroute(traceHistoryData[idx]);
+        };
+
+        // Load initial trace history from SSE
+        window.loadTraceHistory = function(data) {
+            if (Array.isArray(data)) {
+                traceHistoryData = data;
+                renderTraceHistory();
+            }
+        };
+
+        // Append new trace result and auto-open the panel
+        window.appendTraceHistory = function(entry) {
+            traceHistoryData.push(entry);
+            renderTraceHistory();
+
+            // Auto-open the panel if it is closed
+            if (!traceHistoryOpen) {
+                var panel = document.getElementById('trace-history-panel');
+                var btn = document.getElementById('trace-history-btn');
+                traceHistoryOpen = true;
+                panel.style.display = '';
+                btn.classList.add('active');
+            }
+
+            // Scroll to top since newest entries render first
+            var panel = document.getElementById('trace-history-panel');
+            panel.scrollTop = 0;
+        };
 
         // ── Periodic refresh: keep "Last Heard" relative times up-to-date ──
         setInterval(function() {

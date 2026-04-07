@@ -1191,3 +1191,408 @@ func TestSSE_InitialChatHistory(t *testing.T) {
 		t.Error("SSE chat_history event missing expected message text")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// /api/request-position tests
+// ---------------------------------------------------------------------------
+
+func TestAPIRequestPosition_MethodNotAllowed(t *testing.T) {
+	s := newTestServer(t, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/request-position", nil)
+	rec := httptest.NewRecorder()
+
+	s.handleAPIRequestPosition(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestAPIRequestPosition_NoSendFn(t *testing.T) {
+	s := newTestServer(t, nil)
+
+	body := `{"target":12345}`
+	req := httptest.NewRequest(http.MethodPost, "/api/request-position", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	s.handleAPIRequestPosition(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestAPIRequestPosition_MissingTarget(t *testing.T) {
+	s := NewServer(":0", metrics.New(10, 300), slog.Default(),
+		func() []string { return nil }, nil,
+		WithChatSupport(func(p []byte) {}, func() [][]byte { return nil }, func() uint32 { return 1 }),
+	)
+
+	body := `{"target":0}`
+	req := httptest.NewRequest(http.MethodPost, "/api/request-position", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	s.handleAPIRequestPosition(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestAPIRequestPosition_Success(t *testing.T) {
+	var sentPayload []byte
+	s := NewServer(":0", metrics.New(10, 300), slog.Default(),
+		func() []string { return nil }, nil,
+		WithChatSupport(
+			func(p []byte) { sentPayload = p },
+			func() [][]byte { return nil },
+			func() uint32 { return 1 },
+		),
+	)
+
+	body := `{"target":305419896}`
+	req := httptest.NewRequest(http.MethodPost, "/api/request-position", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	s.handleAPIRequestPosition(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if sentPayload == nil {
+		t.Fatal("sendToNodeFn was not called")
+	}
+
+	toRadio := &pb.ToRadio{}
+	if err := proto.Unmarshal(sentPayload, toRadio); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	pkt := toRadio.GetPayloadVariant().(*pb.ToRadio_Packet)
+	if pkt.Packet.GetTo() != 305419896 {
+		t.Errorf("To = %d, want 305419896", pkt.Packet.GetTo())
+	}
+	decoded := pkt.Packet.GetPayloadVariant().(*pb.MeshPacket_Decoded)
+	if decoded.Decoded.GetPortnum() != pb.PortNum_POSITION_APP {
+		t.Errorf("PortNum = %s, want POSITION_APP", decoded.Decoded.GetPortnum())
+	}
+	if !decoded.Decoded.GetWantResponse() {
+		t.Error("expected WantResponse=true")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// /api/request-nodeinfo tests
+// ---------------------------------------------------------------------------
+
+func TestAPIRequestNodeInfo_MethodNotAllowed(t *testing.T) {
+	s := newTestServer(t, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/request-nodeinfo", nil)
+	rec := httptest.NewRecorder()
+
+	s.handleAPIRequestNodeInfo(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestAPIRequestNodeInfo_Success(t *testing.T) {
+	var sentPayload []byte
+	s := NewServer(":0", metrics.New(10, 300), slog.Default(),
+		func() []string { return nil }, nil,
+		WithChatSupport(
+			func(p []byte) { sentPayload = p },
+			func() [][]byte { return nil },
+			func() uint32 { return 1 },
+		),
+	)
+
+	body := `{"target":305419896}`
+	req := httptest.NewRequest(http.MethodPost, "/api/request-nodeinfo", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	s.handleAPIRequestNodeInfo(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if sentPayload == nil {
+		t.Fatal("sendToNodeFn was not called")
+	}
+
+	toRadio := &pb.ToRadio{}
+	if err := proto.Unmarshal(sentPayload, toRadio); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	pkt := toRadio.GetPayloadVariant().(*pb.ToRadio_Packet)
+	decoded := pkt.Packet.GetPayloadVariant().(*pb.MeshPacket_Decoded)
+	if decoded.Decoded.GetPortnum() != pb.PortNum_NODEINFO_APP {
+		t.Errorf("PortNum = %s, want NODEINFO_APP", decoded.Decoded.GetPortnum())
+	}
+	if !decoded.Decoded.GetWantResponse() {
+		t.Error("expected WantResponse=true")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// /api/store-forward tests
+// ---------------------------------------------------------------------------
+
+func TestAPIStoreForward_MethodNotAllowed(t *testing.T) {
+	s := newTestServer(t, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/store-forward", nil)
+	rec := httptest.NewRecorder()
+
+	s.handleAPIStoreForward(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestAPIStoreForward_Success(t *testing.T) {
+	var sentPayload []byte
+	s := NewServer(":0", metrics.New(10, 300), slog.Default(),
+		func() []string { return nil }, nil,
+		WithChatSupport(
+			func(p []byte) { sentPayload = p },
+			func() [][]byte { return nil },
+			func() uint32 { return 1 },
+		),
+	)
+
+	body := `{"target":305419896}`
+	req := httptest.NewRequest(http.MethodPost, "/api/store-forward", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	s.handleAPIStoreForward(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if sentPayload == nil {
+		t.Fatal("sendToNodeFn was not called")
+	}
+
+	toRadio := &pb.ToRadio{}
+	if err := proto.Unmarshal(sentPayload, toRadio); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	pkt := toRadio.GetPayloadVariant().(*pb.ToRadio_Packet)
+	if pkt.Packet.GetTo() != 305419896 {
+		t.Errorf("To = %d, want 305419896", pkt.Packet.GetTo())
+	}
+	decoded := pkt.Packet.GetPayloadVariant().(*pb.MeshPacket_Decoded)
+	if decoded.Decoded.GetPortnum() != pb.PortNum_STORE_FORWARD_APP {
+		t.Errorf("PortNum = %s, want STORE_FORWARD_APP", decoded.Decoded.GetPortnum())
+	}
+	if !decoded.Decoded.GetWantResponse() {
+		t.Error("expected WantResponse=true")
+	}
+
+	// Verify the inner StoreAndForward payload
+	sf := &pb.StoreAndForward{}
+	if err := proto.Unmarshal(decoded.Decoded.GetPayload(), sf); err != nil {
+		t.Fatalf("failed to unmarshal StoreAndForward: %v", err)
+	}
+	if sf.GetRr() != pb.StoreAndForward_CLIENT_HISTORY {
+		t.Errorf("Rr = %s, want CLIENT_HISTORY", sf.GetRr())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// /api/favorite tests
+// ---------------------------------------------------------------------------
+
+func TestAPIFavorite_MethodNotAllowed(t *testing.T) {
+	s := newTestServer(t, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/favorite", nil)
+	rec := httptest.NewRecorder()
+
+	s.handleAPIFavorite(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestAPIFavorite_MissingNodeNum(t *testing.T) {
+	s := newTestServer(t, nil)
+
+	body := `{"node_num":0,"is_favorite":true}`
+	req := httptest.NewRequest(http.MethodPost, "/api/favorite", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	s.handleAPIFavorite(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestAPIFavorite_NodeNotFound(t *testing.T) {
+	m := metrics.New(10, 300)
+	m.SetNodeDirectory(map[uint32]metrics.NodeEntry{
+		0x11: {ShortName: "A"},
+	})
+	s := newTestServerWithMetrics(t, m, nil)
+
+	body := `{"node_num":999,"is_favorite":true}`
+	req := httptest.NewRequest(http.MethodPost, "/api/favorite", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	s.handleAPIFavorite(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestAPIFavorite_Success(t *testing.T) {
+	m := metrics.New(10, 300)
+	m.SetNodeDirectory(map[uint32]metrics.NodeEntry{
+		0x11: {ShortName: "A", IsFavorite: false},
+	})
+	s := newTestServerWithMetrics(t, m, nil)
+
+	body := fmt.Sprintf(`{"node_num":%d,"is_favorite":true}`, 0x11)
+	req := httptest.NewRequest(http.MethodPost, "/api/favorite", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	s.handleAPIFavorite(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	// Verify the node is now a favorite
+	entry := m.NodeDirectory()[0x11]
+	if !entry.IsFavorite {
+		t.Error("expected node to be favorite after API call")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// /api/traceroute/history tests
+// ---------------------------------------------------------------------------
+
+func TestAPITracerouteHistory_MethodNotAllowed(t *testing.T) {
+	s := newTestServer(t, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/traceroute/history", nil)
+	rec := httptest.NewRecorder()
+
+	s.handleAPITracerouteHistory(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestAPITracerouteHistory_Empty(t *testing.T) {
+	s := newTestServer(t, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/traceroute/history", nil)
+	rec := httptest.NewRecorder()
+
+	s.handleAPITracerouteHistory(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var entries []metrics.TracerouteEntry
+	if err := json.Unmarshal(rec.Body.Bytes(), &entries); err != nil {
+		t.Fatalf("failed to decode JSON: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected empty history, got %d entries", len(entries))
+	}
+}
+
+func TestAPITracerouteHistory_WithEntries(t *testing.T) {
+	m := metrics.New(10, 300)
+	m.PublishTraceroute(metrics.TracerouteUpdate{
+		From: 0xAA, To: 0xBB, Route: []uint32{0xCC},
+		SnrTowards: []int32{24}, // 6.0 dB
+	})
+	m.PublishTraceroute(metrics.TracerouteUpdate{From: 0xDD, To: 0xBB})
+	s := newTestServerWithMetrics(t, m, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/traceroute/history", nil)
+	rec := httptest.NewRecorder()
+
+	s.handleAPITracerouteHistory(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var entries []metrics.TracerouteEntry
+	if err := json.Unmarshal(rec.Body.Bytes(), &entries); err != nil {
+		t.Fatalf("failed to decode JSON: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(entries))
+	}
+	if entries[0].From != 0xAA {
+		t.Errorf("entries[0].From = %d, want %d", entries[0].From, 0xAA)
+	}
+	if len(entries[0].SnrTowards) != 1 || entries[0].SnrTowards[0] != 24 {
+		t.Errorf("entries[0].SnrTowards = %v, want [24]", entries[0].SnrTowards)
+	}
+	if entries[1].From != 0xDD {
+		t.Errorf("entries[1].From = %d, want %d", entries[1].From, 0xDD)
+	}
+	if entries[1].SnrTowards != nil {
+		t.Errorf("entries[1].SnrTowards = %v, want nil", entries[1].SnrTowards)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SSE trace_history initial event test
+// ---------------------------------------------------------------------------
+
+func TestSSE_InitialTraceHistory(t *testing.T) {
+	m := metrics.New(10, 300)
+	m.PublishTraceroute(metrics.TracerouteUpdate{
+		From: 0xAABBCCDD, To: 0x11223344,
+		Route:      []uint32{0x55667788},
+		SnrTowards: []int32{28}, // 7.0 dB
+	})
+	s := newTestServerWithMetrics(t, m, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/events", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		s.handleSSE(rec, req)
+		close(done)
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handleSSE did not return after context cancel")
+	}
+
+	body := rec.Body.String()
+
+	if !strings.Contains(body, "event: trace_history") {
+		t.Error("SSE response missing initial trace_history event")
+	}
+	if !strings.Contains(body, "2864434397") { // 0xAABBCCDD in decimal
+		t.Error("SSE trace_history event missing expected traceroute data")
+	}
+}

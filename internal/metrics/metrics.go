@@ -125,10 +125,19 @@ type NodeInfoUpdate struct {
 
 // TracerouteUpdate is published via SSE when a TRACEROUTE_APP response is received.
 type TracerouteUpdate struct {
-	From      uint32   `json:"from"`       // target node that responded
-	To        uint32   `json:"to"`         // requesting node (our node)
-	Route     []uint32 `json:"route"`      // forward hops (requester → target)
-	RouteBack []uint32 `json:"route_back"` // return hops (target → requester)
+	From       uint32   `json:"from"`                  // target node that responded
+	To         uint32   `json:"to"`                    // requesting node (our node)
+	Route      []uint32 `json:"route"`                 // forward hops (requester → target)
+	RouteBack  []uint32 `json:"route_back"`            // return hops (target → requester)
+	SnrTowards []int32  `json:"snr_towards,omitempty"` // SNR (dB×4) at each forward hop
+	SnrBack    []int32  `json:"snr_back,omitempty"`    // SNR (dB×4) at each return hop
+}
+
+// TracerouteEntry is a TracerouteUpdate with a timestamp, stored in the
+// trace history ring buffer for the Trace History panel.
+type TracerouteEntry struct {
+	TracerouteUpdate
+	Timestamp time.Time `json:"timestamp"`
 }
 
 // ChatMessage stores a single text message from the mesh network.
@@ -224,6 +233,11 @@ type Metrics struct {
 	chatMessages    []ChatMessage
 	maxChatMessages int
 
+	// Traceroute history (ring buffer)
+	traceMu         sync.RWMutex
+	traceHistory    []TracerouteEntry
+	maxTraceHistory int
+
 	// Traffic time-series (ring buffer)
 	trafficMu      sync.RWMutex
 	trafficSamples []TrafficSample
@@ -261,6 +275,8 @@ func New(maxMessages, maxTrafficSamples int) *Metrics {
 		maxMessages:     maxMessages,
 		chatMessages:    make([]ChatMessage, 0, 500),
 		maxChatMessages: 500,
+		traceHistory:    make([]TracerouteEntry, 0, 100),
+		maxTraceHistory: 100,
 		trafficSamples:  make([]TrafficSample, 0, maxTrafficSamples),
 		maxSamples:      maxTrafficSamples,
 		typeCounts:      make(map[string]int64),
@@ -560,10 +576,54 @@ func (m *Metrics) UpsertNode(update NodeInfoUpdate) {
 	m.publish(Event{Type: "node_update", Data: update})
 }
 
-// PublishTraceroute publishes a "traceroute_result" SSE event when a
-// TRACEROUTE_APP response is received from the mesh network.
+// SetFavorite toggles the IsFavorite flag for a node in the directory.
+// Returns false if the node is not found.
+func (m *Metrics) SetFavorite(nodeNum uint32, fav bool) bool {
+	m.nodeDirMu.Lock()
+	entry, ok := m.nodeDir[nodeNum]
+	if !ok {
+		m.nodeDirMu.Unlock()
+		return false
+	}
+	entry.IsFavorite = fav
+	m.nodeDir[nodeNum] = entry
+	m.nodeDirMu.Unlock()
+
+	// Publish update so all SSE clients see the change.
+	m.publish(Event{Type: "node_favorite", Data: map[string]any{
+		"node_num":    nodeNum,
+		"is_favorite": fav,
+	}})
+	return true
+}
+
+// PublishTraceroute stores the traceroute result in the history ring buffer
+// and publishes a "traceroute_result" SSE event.
 func (m *Metrics) PublishTraceroute(update TracerouteUpdate) {
-	m.publish(Event{Type: "traceroute_result", Data: update})
+	entry := TracerouteEntry{
+		TracerouteUpdate: update,
+		Timestamp:        time.Now(),
+	}
+
+	m.traceMu.Lock()
+	if len(m.traceHistory) >= m.maxTraceHistory {
+		copy(m.traceHistory, m.traceHistory[1:])
+		m.traceHistory = m.traceHistory[:len(m.traceHistory)-1]
+	}
+	m.traceHistory = append(m.traceHistory, entry)
+	m.traceMu.Unlock()
+
+	m.publish(Event{Type: "traceroute_result", Data: entry})
+}
+
+// TraceHistory returns a copy of the traceroute history.
+func (m *Metrics) TraceHistory() []TracerouteEntry {
+	m.traceMu.RLock()
+	defer m.traceMu.RUnlock()
+
+	result := make([]TracerouteEntry, len(m.traceHistory))
+	copy(result, m.traceHistory)
+	return result
 }
 
 // RecordMessage adds a message to the log.

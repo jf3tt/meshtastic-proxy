@@ -453,10 +453,12 @@ func (c *Connection) readLoop(ctx context.Context, conn net.Conn) error {
 		// Publish traceroute responses so the dashboard can visualize the route.
 		if tr := ExtractTraceroute(payload); tr != nil {
 			c.metrics.PublishTraceroute(metrics.TracerouteUpdate{
-				From:      tr.From,
-				To:        tr.To,
-				Route:     tr.Route,
-				RouteBack: tr.RouteBack,
+				From:       tr.From,
+				To:         tr.To,
+				Route:      tr.Route,
+				RouteBack:  tr.RouteBack,
+				SnrTowards: tr.SnrTowards,
+				SnrBack:    tr.SnrBack,
 			})
 		}
 
