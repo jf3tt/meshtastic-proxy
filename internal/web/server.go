@@ -282,8 +282,7 @@ type chatSendRequest struct {
 
 // handleAPIChatSend sends a text message via the connected Meshtastic node.
 func (s *Server) handleAPIChatSend(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requirePost(w, r) {
 		return
 	}
 
@@ -302,8 +301,8 @@ func (s *Server) handleAPIChatSend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "text is required", http.StatusBadRequest)
 		return
 	}
-	if len(req.Text) > 237 {
-		http.Error(w, "text too long (max 237 bytes)", http.StatusBadRequest)
+	if len(req.Text) > maxTextPayload {
+		http.Error(w, fmt.Sprintf("text too long (max %d bytes)", maxTextPayload), http.StatusBadRequest)
 		return
 	}
 
@@ -338,77 +337,7 @@ func (s *Server) handleAPIChatSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.sendToNodeFn(data)
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"ok":true}` + "\n"))
-}
-
-// tracerouteRequest is the JSON body for POST /api/traceroute.
-type tracerouteRequest struct {
-	Target uint32 `json:"target"` // destination node number
-}
-
-// handleAPITraceroute sends a traceroute request to the specified node.
-// The result arrives asynchronously via SSE "traceroute_result" event.
-func (s *Server) handleAPITraceroute(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	if s.sendToNodeFn == nil {
-		http.Error(w, "traceroute not available", http.StatusServiceUnavailable)
-		return
-	}
-
-	var req tracerouteRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	if req.Target == 0 {
-		http.Error(w, "target is required", http.StatusBadRequest)
-		return
-	}
-
-	// Build ToRadio with MeshPacket containing TRACEROUTE_APP + WantResponse
-	routePayload, err := proto.Marshal(&pb.RouteDiscovery{})
-	if err != nil {
-		s.logger.Error("failed to marshal RouteDiscovery", "error", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	toRadio := &pb.ToRadio{
-		PayloadVariant: &pb.ToRadio_Packet{
-			Packet: &pb.MeshPacket{
-				To: req.Target,
-				PayloadVariant: &pb.MeshPacket_Decoded{
-					Decoded: &pb.Data{
-						Portnum:      pb.PortNum_TRACEROUTE_APP,
-						Payload:      routePayload,
-						WantResponse: true,
-					},
-				},
-				WantAck: true,
-			},
-		},
-	}
-
-	data, err := proto.Marshal(toRadio)
-	if err != nil {
-		s.logger.Error("failed to marshal traceroute ToRadio", "error", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	s.sendToNodeFn(data)
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"ok":true}` + "\n"))
+	jsonOK(w)
 }
 
 // handleAPITracerouteHistory returns the stored traceroute history as JSON.
@@ -425,185 +354,6 @@ func (s *Server) handleAPITracerouteHistory(w http.ResponseWriter, r *http.Reque
 	}
 }
 
-// nodeActionRequest is the JSON body for node action endpoints
-// (request-position, request-nodeinfo, store-forward).
-type nodeActionRequest struct {
-	Target uint32 `json:"target"` // destination node number
-}
-
-// handleAPIRequestPosition sends a position request to the specified node.
-// The result arrives asynchronously via SSE "node_position_update" event.
-func (s *Server) handleAPIRequestPosition(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	if s.sendToNodeFn == nil {
-		http.Error(w, "not available", http.StatusServiceUnavailable)
-		return
-	}
-
-	var req nodeActionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	if req.Target == 0 {
-		http.Error(w, "target is required", http.StatusBadRequest)
-		return
-	}
-
-	toRadio := &pb.ToRadio{
-		PayloadVariant: &pb.ToRadio_Packet{
-			Packet: &pb.MeshPacket{
-				To: req.Target,
-				PayloadVariant: &pb.MeshPacket_Decoded{
-					Decoded: &pb.Data{
-						Portnum:      pb.PortNum_POSITION_APP,
-						Payload:      []byte{},
-						WantResponse: true,
-					},
-				},
-				WantAck: true,
-			},
-		},
-	}
-
-	data, err := proto.Marshal(toRadio)
-	if err != nil {
-		s.logger.Error("failed to marshal position request ToRadio", "error", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	s.sendToNodeFn(data)
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"ok":true}` + "\n"))
-}
-
-// handleAPIRequestNodeInfo sends a nodeinfo request to the specified node.
-// The result arrives asynchronously via SSE "node_update" event.
-func (s *Server) handleAPIRequestNodeInfo(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	if s.sendToNodeFn == nil {
-		http.Error(w, "not available", http.StatusServiceUnavailable)
-		return
-	}
-
-	var req nodeActionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	if req.Target == 0 {
-		http.Error(w, "target is required", http.StatusBadRequest)
-		return
-	}
-
-	toRadio := &pb.ToRadio{
-		PayloadVariant: &pb.ToRadio_Packet{
-			Packet: &pb.MeshPacket{
-				To: req.Target,
-				PayloadVariant: &pb.MeshPacket_Decoded{
-					Decoded: &pb.Data{
-						Portnum:      pb.PortNum_NODEINFO_APP,
-						Payload:      []byte{},
-						WantResponse: true,
-					},
-				},
-				WantAck: true,
-			},
-		},
-	}
-
-	data, err := proto.Marshal(toRadio)
-	if err != nil {
-		s.logger.Error("failed to marshal nodeinfo request ToRadio", "error", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	s.sendToNodeFn(data)
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"ok":true}` + "\n"))
-}
-
-// handleAPIStoreForward sends a Store & Forward history request to the specified node.
-// This asks a Store & Forward router node to replay missed messages.
-func (s *Server) handleAPIStoreForward(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	if s.sendToNodeFn == nil {
-		http.Error(w, "not available", http.StatusServiceUnavailable)
-		return
-	}
-
-	var req nodeActionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	if req.Target == 0 {
-		http.Error(w, "target is required", http.StatusBadRequest)
-		return
-	}
-
-	// StoreAndForward CLIENT_HISTORY request
-	sfPayload, err := proto.Marshal(&pb.StoreAndForward{
-		Rr:      pb.StoreAndForward_CLIENT_HISTORY,
-		Variant: &pb.StoreAndForward_History_{History: &pb.StoreAndForward_History{}},
-	})
-	if err != nil {
-		s.logger.Error("failed to marshal StoreAndForward payload", "error", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	toRadio := &pb.ToRadio{
-		PayloadVariant: &pb.ToRadio_Packet{
-			Packet: &pb.MeshPacket{
-				To: req.Target,
-				PayloadVariant: &pb.MeshPacket_Decoded{
-					Decoded: &pb.Data{
-						Portnum:      pb.PortNum_STORE_FORWARD_APP,
-						Payload:      sfPayload,
-						WantResponse: true,
-					},
-				},
-				WantAck: true,
-			},
-		},
-	}
-
-	data, err := proto.Marshal(toRadio)
-	if err != nil {
-		s.logger.Error("failed to marshal store-forward ToRadio", "error", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	s.sendToNodeFn(data)
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"ok":true}` + "\n"))
-}
-
 // favoriteRequest is the JSON body for POST /api/favorite.
 type favoriteRequest struct {
 	NodeNum    uint32 `json:"node_num"`
@@ -613,8 +363,7 @@ type favoriteRequest struct {
 // handleAPIFavorite toggles the favorite flag for a node in the node directory.
 // This is a local-only operation — it does not send anything to the mesh.
 func (s *Server) handleAPIFavorite(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requirePost(w, r) {
 		return
 	}
 
@@ -634,9 +383,7 @@ func (s *Server) handleAPIFavorite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"ok":true}` + "\n"))
+	jsonOK(w)
 }
 
 type channelInfo struct {
