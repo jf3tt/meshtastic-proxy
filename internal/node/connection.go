@@ -145,6 +145,94 @@ func (c *Connection) ConfigCache() [][]byte {
 	return result
 }
 
+// UpsertCachedNodeInfo inserts or replaces a FromRadio_NodeInfo frame in the
+// config cache so that newly discovered nodes (via NODEINFO_APP packets) are
+// available to clients that connect later. The synthesized frame uses the
+// identity fields from NodeInfoData and sets LastHeard to the current time.
+//
+// If a NodeInfo frame for the same node number already exists in the cache it
+// is replaced in-place. Otherwise a new frame is inserted immediately before
+// the final ConfigCompleteId frame so that filterConfigCache and
+// replayCachedConfig pick it up without any changes.
+func (c *Connection) UpsertCachedNodeInfo(ni *NodeInfoData) {
+	if ni == nil || ni.NodeNum == 0 {
+		return
+	}
+
+	// Synthesize a FromRadio_NodeInfo protobuf frame.
+	frame := buildNodeInfoFrame(ni)
+	if frame == nil {
+		return
+	}
+
+	c.configMu.Lock()
+	defer c.configMu.Unlock()
+
+	if len(c.configCache) == 0 {
+		return // no config cached yet — nothing to augment
+	}
+
+	// Look for an existing NodeInfo frame with the same node number.
+	for i, raw := range c.configCache {
+		msg := &pb.FromRadio{}
+		if err := proto.Unmarshal(raw, msg); err != nil {
+			continue
+		}
+		v, ok := msg.GetPayloadVariant().(*pb.FromRadio_NodeInfo)
+		if !ok || v.NodeInfo == nil {
+			continue
+		}
+		if v.NodeInfo.GetNum() == ni.NodeNum {
+			// Replace existing frame in-place.
+			c.configCache[i] = frame
+			return
+		}
+	}
+
+	// Not found — insert before the last frame (ConfigCompleteId).
+	// If the cache only has one frame (edge case), just append.
+	if len(c.configCache) <= 1 {
+		c.configCache = append(c.configCache, frame)
+		return
+	}
+	insertIdx := len(c.configCache) - 1
+	c.configCache = append(c.configCache, nil)                   // grow by one
+	copy(c.configCache[insertIdx+1:], c.configCache[insertIdx:]) // shift last frame right
+	c.configCache[insertIdx] = frame
+}
+
+// buildNodeInfoFrame synthesizes a serialized FromRadio_NodeInfo protobuf
+// from NodeInfoData. Returns nil on marshal failure.
+func buildNodeInfoFrame(ni *NodeInfoData) []byte {
+	hwModel := pb.HardwareModel(pb.HardwareModel_value[ni.HwModel])
+	role := pb.Config_DeviceConfig_Role(pb.Config_DeviceConfig_Role_value[ni.Role])
+
+	now := uint32(time.Now().Unix()) //nolint:gosec // G115: unix timestamp fits uint32 until 2106
+
+	msg := &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_NodeInfo{
+			NodeInfo: &pb.NodeInfo{
+				Num: ni.NodeNum,
+				User: &pb.User{
+					Id:         ni.UserID,
+					ShortName:  ni.ShortName,
+					LongName:   ni.LongName,
+					HwModel:    hwModel,
+					Role:       role,
+					IsLicensed: ni.IsLicensed,
+				},
+				LastHeard: now,
+			},
+		},
+	}
+
+	raw, err := proto.Marshal(msg)
+	if err != nil {
+		return nil
+	}
+	return raw
+}
+
 // MyNodeNum returns the node number of the connected Meshtastic node.
 // Returns 0 if the config has not yet been received.
 func (c *Connection) MyNodeNum() uint32 {
@@ -356,6 +444,10 @@ func (c *Connection) readLoop(ctx context.Context, conn net.Conn) error {
 				Role:       ni.Role,
 				IsLicensed: ni.IsLicensed,
 			})
+
+			// Keep config cache up-to-date so clients that connect later
+			// receive the new node during config replay.
+			c.UpsertCachedNodeInfo(ni)
 		}
 
 		// Publish traceroute responses so the dashboard can visualize the route.

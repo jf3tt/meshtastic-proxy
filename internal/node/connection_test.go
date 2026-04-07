@@ -2962,3 +2962,375 @@ func TestExtractMyNodeNum_GarbagePayload(t *testing.T) {
 		t.Errorf("myNodeNum = %d, want 0 for garbage payload", num)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// UpsertCachedNodeInfo tests
+// ---------------------------------------------------------------------------
+
+// helper: build a minimal config cache with MyInfo, one NodeInfo, and ConfigCompleteId.
+func buildMinimalCache(t *testing.T, myNum uint32, existingNodes ...uint32) [][]byte {
+	t.Helper()
+	var frames [][]byte
+
+	frames = append(frames, marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_MyInfo{
+			MyInfo: &pb.MyNodeInfo{MyNodeNum: myNum},
+		},
+	}))
+
+	for _, n := range existingNodes {
+		frames = append(frames, marshalFromRadio(t, &pb.FromRadio{
+			PayloadVariant: &pb.FromRadio_NodeInfo{
+				NodeInfo: &pb.NodeInfo{
+					Num: n,
+					User: &pb.User{
+						ShortName: fmt.Sprintf("N%d", n),
+						LongName:  fmt.Sprintf("Node %d", n),
+					},
+				},
+			},
+		}))
+	}
+
+	frames = append(frames, marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_ConfigCompleteId{
+			ConfigCompleteId: 99999,
+		},
+	}))
+
+	return frames
+}
+
+// extractNodeInfoNums returns all NodeInfo node numbers from a config cache.
+func extractNodeInfoNums(t *testing.T, frames [][]byte) []uint32 {
+	t.Helper()
+	var nums []uint32
+	for _, raw := range frames {
+		msg := &pb.FromRadio{}
+		if err := proto.Unmarshal(raw, msg); err != nil {
+			continue
+		}
+		if v, ok := msg.GetPayloadVariant().(*pb.FromRadio_NodeInfo); ok {
+			nums = append(nums, v.NodeInfo.GetNum())
+		}
+	}
+	return nums
+}
+
+// lastFrameIsConfigComplete checks that the last frame in cache is ConfigCompleteId.
+func lastFrameIsConfigComplete(t *testing.T, frames [][]byte) bool {
+	t.Helper()
+	if len(frames) == 0 {
+		return false
+	}
+	msg := &pb.FromRadio{}
+	if err := proto.Unmarshal(frames[len(frames)-1], msg); err != nil {
+		return false
+	}
+	_, ok := msg.GetPayloadVariant().(*pb.FromRadio_ConfigCompleteId)
+	return ok
+}
+
+func TestUpsertCachedNodeInfo_InsertNew(t *testing.T) {
+	m := metrics.New(10, 300)
+	c := newTestConnection("127.0.0.1:0", m)
+
+	cache := buildMinimalCache(t, 100, 100) // MyInfo + NodeInfo(100) + ConfigCompleteId
+	c.configMu.Lock()
+	c.configCache = cache
+	c.configMu.Unlock()
+
+	if len(c.ConfigCache()) != 3 {
+		t.Fatalf("initial cache len = %d, want 3", len(c.ConfigCache()))
+	}
+
+	// Insert a new node 200.
+	c.UpsertCachedNodeInfo(&NodeInfoData{
+		NodeNum:   200,
+		ShortName: "N2",
+		LongName:  "Node Two",
+		HwModel:   "HELTEC_V3",
+		Role:      "CLIENT",
+	})
+
+	got := c.ConfigCache()
+	if len(got) != 4 {
+		t.Fatalf("cache len after insert = %d, want 4", len(got))
+	}
+
+	// Verify node 200 is in the cache.
+	nums := extractNodeInfoNums(t, got)
+	found := false
+	for _, n := range nums {
+		if n == 200 {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("node 200 not found in cache; nodes = %v", nums)
+	}
+
+	// ConfigCompleteId must remain the last frame.
+	if !lastFrameIsConfigComplete(t, got) {
+		t.Error("ConfigCompleteId is not the last frame after insert")
+	}
+}
+
+func TestUpsertCachedNodeInfo_ReplaceExisting(t *testing.T) {
+	m := metrics.New(10, 300)
+	c := newTestConnection("127.0.0.1:0", m)
+
+	cache := buildMinimalCache(t, 100, 100, 200) // MyInfo + NodeInfo(100) + NodeInfo(200) + ConfigCompleteId
+	c.configMu.Lock()
+	c.configCache = cache
+	c.configMu.Unlock()
+
+	if len(c.ConfigCache()) != 4 {
+		t.Fatalf("initial cache len = %d, want 4", len(c.ConfigCache()))
+	}
+
+	// Update node 200 with new name.
+	c.UpsertCachedNodeInfo(&NodeInfoData{
+		NodeNum:   200,
+		ShortName: "XX",
+		LongName:  "Updated Node",
+	})
+
+	got := c.ConfigCache()
+	// Length should remain the same — replaced in-place.
+	if len(got) != 4 {
+		t.Fatalf("cache len after replace = %d, want 4", len(got))
+	}
+
+	// Verify updated short name.
+	for _, raw := range got {
+		msg := &pb.FromRadio{}
+		if err := proto.Unmarshal(raw, msg); err != nil {
+			continue
+		}
+		v, ok := msg.GetPayloadVariant().(*pb.FromRadio_NodeInfo)
+		if !ok || v.NodeInfo.GetNum() != 200 {
+			continue
+		}
+		if v.NodeInfo.GetUser().GetShortName() != "XX" {
+			t.Errorf("short_name = %q, want %q", v.NodeInfo.GetUser().GetShortName(), "XX")
+		}
+		if v.NodeInfo.GetUser().GetLongName() != "Updated Node" {
+			t.Errorf("long_name = %q, want %q", v.NodeInfo.GetUser().GetLongName(), "Updated Node")
+		}
+		return
+	}
+	t.Error("node 200 not found in cache after replace")
+}
+
+func TestUpsertCachedNodeInfo_EmptyCache(t *testing.T) {
+	m := metrics.New(10, 300)
+	c := newTestConnection("127.0.0.1:0", m)
+
+	// No config cache — should be a no-op.
+	c.UpsertCachedNodeInfo(&NodeInfoData{
+		NodeNum:   300,
+		ShortName: "N3",
+	})
+
+	if len(c.ConfigCache()) != 0 {
+		t.Errorf("cache len = %d, want 0 (no-op on empty cache)", len(c.ConfigCache()))
+	}
+}
+
+func TestUpsertCachedNodeInfo_NilData(t *testing.T) {
+	m := metrics.New(10, 300)
+	c := newTestConnection("127.0.0.1:0", m)
+
+	cache := buildMinimalCache(t, 100, 100)
+	c.configMu.Lock()
+	c.configCache = cache
+	c.configMu.Unlock()
+
+	// Nil should be a no-op.
+	c.UpsertCachedNodeInfo(nil)
+
+	if len(c.ConfigCache()) != 3 {
+		t.Errorf("cache len = %d, want 3 (unchanged)", len(c.ConfigCache()))
+	}
+}
+
+func TestUpsertCachedNodeInfo_ZeroNodeNum(t *testing.T) {
+	m := metrics.New(10, 300)
+	c := newTestConnection("127.0.0.1:0", m)
+
+	cache := buildMinimalCache(t, 100, 100)
+	c.configMu.Lock()
+	c.configCache = cache
+	c.configMu.Unlock()
+
+	// Zero node num should be a no-op.
+	c.UpsertCachedNodeInfo(&NodeInfoData{NodeNum: 0})
+
+	if len(c.ConfigCache()) != 3 {
+		t.Errorf("cache len = %d, want 3 (unchanged)", len(c.ConfigCache()))
+	}
+}
+
+func TestUpsertCachedNodeInfo_PreservesEnums(t *testing.T) {
+	m := metrics.New(10, 300)
+	c := newTestConnection("127.0.0.1:0", m)
+
+	cache := buildMinimalCache(t, 100, 100)
+	c.configMu.Lock()
+	c.configCache = cache
+	c.configMu.Unlock()
+
+	c.UpsertCachedNodeInfo(&NodeInfoData{
+		NodeNum:   500,
+		ShortName: "HV",
+		LongName:  "Heltec V3",
+		HwModel:   "HELTEC_V3",
+		Role:      "ROUTER",
+	})
+
+	got := c.ConfigCache()
+	for _, raw := range got {
+		msg := &pb.FromRadio{}
+		if err := proto.Unmarshal(raw, msg); err != nil {
+			continue
+		}
+		v, ok := msg.GetPayloadVariant().(*pb.FromRadio_NodeInfo)
+		if !ok || v.NodeInfo.GetNum() != 500 {
+			continue
+		}
+		if v.NodeInfo.GetUser().GetHwModel() != pb.HardwareModel_HELTEC_V3 {
+			t.Errorf("hw_model = %v, want HELTEC_V3", v.NodeInfo.GetUser().GetHwModel())
+		}
+		if v.NodeInfo.GetUser().GetRole() != pb.Config_DeviceConfig_ROUTER {
+			t.Errorf("role = %v, want ROUTER", v.NodeInfo.GetUser().GetRole())
+		}
+		return
+	}
+	t.Error("node 500 not found in cache")
+}
+
+func TestUpsertCachedNodeInfo_SetsLastHeard(t *testing.T) {
+	m := metrics.New(10, 300)
+	c := newTestConnection("127.0.0.1:0", m)
+
+	cache := buildMinimalCache(t, 100, 100)
+	c.configMu.Lock()
+	c.configCache = cache
+	c.configMu.Unlock()
+
+	before := uint32(time.Now().Unix()) //nolint:gosec // test code
+	c.UpsertCachedNodeInfo(&NodeInfoData{
+		NodeNum:   600,
+		ShortName: "LH",
+	})
+	after := uint32(time.Now().Unix()) //nolint:gosec // test code
+
+	got := c.ConfigCache()
+	for _, raw := range got {
+		msg := &pb.FromRadio{}
+		if err := proto.Unmarshal(raw, msg); err != nil {
+			continue
+		}
+		v, ok := msg.GetPayloadVariant().(*pb.FromRadio_NodeInfo)
+		if !ok || v.NodeInfo.GetNum() != 600 {
+			continue
+		}
+		lh := v.NodeInfo.GetLastHeard()
+		if lh < before || lh > after {
+			t.Errorf("LastHeard = %d, want between %d and %d", lh, before, after)
+		}
+		return
+	}
+	t.Error("node 600 not found in cache")
+}
+
+func TestUpsertCachedNodeInfo_MultipleInserts(t *testing.T) {
+	m := metrics.New(10, 300)
+	c := newTestConnection("127.0.0.1:0", m)
+
+	cache := buildMinimalCache(t, 100) // MyInfo + ConfigCompleteId (no nodes)
+	c.configMu.Lock()
+	c.configCache = cache
+	c.configMu.Unlock()
+
+	// Insert 3 new nodes.
+	for _, num := range []uint32{10, 20, 30} {
+		c.UpsertCachedNodeInfo(&NodeInfoData{
+			NodeNum:   num,
+			ShortName: fmt.Sprintf("N%d", num),
+		})
+	}
+
+	got := c.ConfigCache()
+	// MyInfo + 3 NodeInfo + ConfigCompleteId = 5
+	if len(got) != 5 {
+		t.Fatalf("cache len = %d, want 5", len(got))
+	}
+
+	nums := extractNodeInfoNums(t, got)
+	if len(nums) != 3 {
+		t.Fatalf("NodeInfo count = %d, want 3", len(nums))
+	}
+
+	// ConfigCompleteId must remain last.
+	if !lastFrameIsConfigComplete(t, got) {
+		t.Error("ConfigCompleteId is not the last frame after multiple inserts")
+	}
+}
+
+func TestBuildNodeInfoFrame_ProducesValidProtobuf(t *testing.T) {
+	ni := &NodeInfoData{
+		NodeNum:    42,
+		ShortName:  "TN",
+		LongName:   "Test Node",
+		UserID:     "!0000002a",
+		HwModel:    "TBEAM",
+		Role:       "CLIENT",
+		IsLicensed: true,
+	}
+
+	frame := buildNodeInfoFrame(ni)
+	if frame == nil {
+		t.Fatal("buildNodeInfoFrame returned nil")
+	}
+
+	msg := &pb.FromRadio{}
+	if err := proto.Unmarshal(frame, msg); err != nil {
+		t.Fatalf("cannot unmarshal synthesized frame: %v", err)
+	}
+
+	v, ok := msg.GetPayloadVariant().(*pb.FromRadio_NodeInfo)
+	if !ok {
+		t.Fatal("frame is not FromRadio_NodeInfo")
+	}
+	if v.NodeInfo.GetNum() != 42 {
+		t.Errorf("Num = %d, want 42", v.NodeInfo.GetNum())
+	}
+	u := v.NodeInfo.GetUser()
+	if u == nil {
+		t.Fatal("User is nil")
+	}
+	if u.GetShortName() != "TN" {
+		t.Errorf("ShortName = %q, want %q", u.GetShortName(), "TN")
+	}
+	if u.GetLongName() != "Test Node" {
+		t.Errorf("LongName = %q, want %q", u.GetLongName(), "Test Node")
+	}
+	if u.GetId() != "!0000002a" {
+		t.Errorf("Id = %q, want %q", u.GetId(), "!0000002a")
+	}
+	if u.GetHwModel() != pb.HardwareModel_TBEAM {
+		t.Errorf("HwModel = %v, want TBEAM", u.GetHwModel())
+	}
+	if u.GetRole() != pb.Config_DeviceConfig_CLIENT {
+		t.Errorf("Role = %v, want CLIENT", u.GetRole())
+	}
+	if !u.GetIsLicensed() {
+		t.Error("IsLicensed = false, want true")
+	}
+	if v.NodeInfo.GetLastHeard() == 0 {
+		t.Error("LastHeard = 0, want non-zero")
+	}
+}
