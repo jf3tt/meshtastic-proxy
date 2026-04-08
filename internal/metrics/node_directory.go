@@ -12,6 +12,20 @@ func (m *Metrics) SetNodeDirectory(dir map[uint32]NodeEntry) {
 	}
 
 	m.nodeDirMu.Lock()
+	// Preserve runtime-only fields from existing entries. SeenRealtime and
+	// IsFavorite are set by real-time updates / user actions and must survive
+	// a full directory replacement (which happens on node reconnect).
+	for num, newEntry := range dir {
+		if old, ok := m.nodeDir[num]; ok {
+			if old.SeenRealtime {
+				newEntry.SeenRealtime = true
+			}
+			if old.IsFavorite {
+				newEntry.IsFavorite = true
+			}
+			dir[num] = newEntry
+		}
+	}
 	m.nodeDir = dir
 	m.relayDir = relay
 	m.nodeDirMu.Unlock()

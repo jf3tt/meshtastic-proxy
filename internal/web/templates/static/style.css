@@ -46,6 +46,13 @@
 .leaflet-popup-content-wrapper { background: #111827; color: #e5e7eb; border: 1px solid #374151; border-radius: 0.75rem; }
 .leaflet-popup-tip { background: #111827; border: 1px solid #374151; }
 .leaflet-popup-content { margin: 12px 16px; font-size: 13px; line-height: 1.5; }
+.leaflet-container a.leaflet-popup-close-button { color: #6b7280; }
+.leaflet-container a.leaflet-popup-close-button:hover { color: #d1d5db; }
+.leaflet-tooltip { background-color: #1f2937; border-color: #374151; color: #e5e7eb; }
+.leaflet-tooltip-top:before { border-top-color: #374151; }
+.leaflet-tooltip-bottom:before { border-bottom-color: #374151; }
+.leaflet-tooltip-left:before { border-left-color: #374151; }
+.leaflet-tooltip-right:before { border-right-color: #374151; }
 
 /* ─── Node popup (map) ──────────────────────────────────────────────── */
 

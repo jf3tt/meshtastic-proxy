@@ -646,6 +646,7 @@
 
     Mesh.bus.on('nodesChanged', function() {
         if (nodesInitialized && !document.getElementById('tab-nodes').classList.contains('hidden')) {
+            if (nodesFiltersOpen) buildRoleCheckboxes();
             renderNodesTable();
         }
     });

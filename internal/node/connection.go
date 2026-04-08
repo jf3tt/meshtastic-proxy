@@ -25,6 +25,7 @@ type Connection struct {
 	maxReconnectInterval time.Duration
 	dialTimeout          time.Duration
 	readTimeout          time.Duration
+	heartbeatInterval    time.Duration
 
 	metrics *metrics.Metrics
 	logger  *slog.Logger
@@ -54,6 +55,7 @@ type ConnectionOptions struct {
 	MaxReconnectInterval time.Duration
 	DialTimeout          time.Duration
 	ReadTimeout          time.Duration
+	HeartbeatInterval    time.Duration
 	FromBuffer           int
 	ToBuffer             int
 	Metrics              *metrics.Metrics
@@ -68,6 +70,7 @@ func NewConnection(opts ConnectionOptions) *Connection {
 		maxReconnectInterval: opts.MaxReconnectInterval,
 		dialTimeout:          opts.DialTimeout,
 		readTimeout:          opts.ReadTimeout,
+		heartbeatInterval:    opts.HeartbeatInterval,
 		metrics:              opts.Metrics,
 		logger:               opts.Logger,
 		fromNode:             make(chan []byte, opts.FromBuffer),
@@ -327,7 +330,11 @@ func (c *Connection) runConnection(ctx context.Context, conn net.Conn) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	errCh := make(chan error, 2)
+	goroutines := 2
+	if c.heartbeatInterval > 0 {
+		goroutines = 3
+	}
+	errCh := make(chan error, goroutines)
 
 	// Reader goroutine
 	go func() {
@@ -338,6 +345,13 @@ func (c *Connection) runConnection(ctx context.Context, conn net.Conn) error {
 	go func() {
 		errCh <- c.writeLoop(ctx, conn)
 	}()
+
+	// Heartbeat goroutine (keeps the connection alive when mesh is quiet)
+	if c.heartbeatInterval > 0 {
+		go func() {
+			errCh <- c.heartbeatLoop(ctx)
+		}()
+	}
 
 	// Wait for first error or context cancellation
 	select {
@@ -517,6 +531,33 @@ func (c *Connection) writeLoop(ctx context.Context, conn net.Conn) error {
 			if err := protocol.WriteFrame(conn, payload); err != nil {
 				return fmt.Errorf("writing frame to node: %w", err)
 			}
+		}
+	}
+}
+
+// heartbeatLoop periodically sends a heartbeat to the node to prevent
+// read_timeout from triggering a reconnect when the mesh is quiet.
+// The Meshtastic node responds with QueueStatus, which resets the read deadline.
+func (c *Connection) heartbeatLoop(ctx context.Context) error {
+	payload, err := proto.Marshal(&pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Heartbeat{
+			Heartbeat: &pb.Heartbeat{},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("marshalling heartbeat: %w", err)
+	}
+
+	ticker := time.NewTicker(c.heartbeatInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			c.Send(payload)
+			c.logger.Debug("heartbeat sent to node")
 		}
 	}
 }
