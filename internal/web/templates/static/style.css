@@ -5,6 +5,11 @@
 @media (min-width: 640px) {
     .sm\:table-cell { display: table-cell !important; }
     .sm\:inline { display: inline !important; }
+    .sm\:inline-block { display: inline-block !important; }
+    .sm\:text-xl { font-size: 1.25rem !important; line-height: 1.75rem !important; }
+    .sm\:text-xs { font-size: 0.75rem !important; line-height: 1rem !important; }
+    .sm\:px-3 { padding-left: 0.75rem !important; padding-right: 0.75rem !important; }
+    .sm\:basis-auto { flex-basis: auto !important; }
     .sm\:flex-none { flex: none !important; }
     .sm\:flex-col { flex-direction: column !important; }
     .sm\:flex-row { flex-direction: row !important; }

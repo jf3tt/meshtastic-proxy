@@ -19,9 +19,9 @@
         <!-- Header -->
         <header class="mb-6 pb-4 border-b border-gray-800">
             <!-- Top row: title + badge + controls -->
-            <div class="flex items-center gap-3 flex-wrap">
-                <h1 class="text-xl font-semibold tracking-tight">Meshtastic TCP Proxy</h1>
-                <span id="node-badge" class="text-xs font-semibold px-3 py-1 rounded-full uppercase tracking-wider
+            <div class="flex items-center gap-2 sm:gap-3">
+                <h1 class="text-lg sm:text-xl font-semibold tracking-tight truncate">Meshtastic TCP Proxy</h1>
+                <span id="node-badge" class="text-[10px] sm:text-xs font-semibold px-2 sm:px-3 py-0.5 sm:py-1 rounded-full uppercase tracking-wider whitespace-nowrap flex-shrink-0
                     {{if .Metrics.NodeConnected}}
                         bg-emerald-500/15 text-emerald-400 border border-emerald-500/30
                     {{else}}
@@ -30,11 +30,11 @@
                     {{if .Metrics.NodeConnected}}Connected{{else}}Disconnected{{end}}
                 </span>
 
-                <div class="ml-auto flex items-center gap-3">
+                <div class="ml-auto flex items-center gap-2 sm:gap-3 flex-shrink-0">
                     <button id="pause-btn"
-                        class="text-xs font-semibold px-3 py-1 rounded-lg bg-gray-800 border border-gray-700 text-gray-300 hover:border-indigo-500/50 hover:text-indigo-400 transition-colors"
+                        class="text-xs font-semibold px-2 sm:px-3 py-1 rounded-lg bg-gray-800 border border-gray-700 text-gray-300 hover:border-indigo-500/50 hover:text-indigo-400 transition-colors"
                         title="Pause/resume live updates">Live</button>
-                    <span id="sse-indicator" class="w-2 h-2 rounded-full bg-gray-600" title="SSE disconnected"></span>
+                    <span id="sse-indicator" class="w-2 h-2 rounded-full bg-gray-600 hidden sm:inline-block" title="SSE disconnected"></span>
                     <span id="sse-label" class="text-xs text-gray-500 hidden sm:inline">Connecting...</span>
                 </div>
             </div>
@@ -407,12 +407,12 @@
                         </button>
                         <button id="nodes-filter-realtime" onclick="setNodesFilter('realtime')"
                             class="nodes-filter-btn text-[10px] font-semibold px-2.5 py-1 rounded-md transition-colors text-gray-400 hover:text-gray-200">
-                            Realtime only
+                            Online
                         </button>
                     </div>
 
                     <!-- Search -->
-                    <div class="relative flex-1 min-w-[140px] sm:max-w-xs order-last sm:order-none w-full sm:w-auto">
+                    <div class="relative flex-1 min-w-0 sm:max-w-xs order-last sm:order-none basis-full sm:basis-auto">
                         <svg class="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500 pointer-events-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
                         <input id="nodes-search" type="text" placeholder="Search nodes..."
                             class="w-full bg-gray-800 border border-gray-700 rounded-lg pl-8 pr-3 py-1 text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:border-indigo-500/50">
@@ -480,7 +480,7 @@
 
                 <!-- Table -->
                 <div id="nodes-table-wrap" class="flex-1 min-h-0 overflow-y-auto overflow-x-auto">
-                    <table class="w-full text-sm min-w-[640px] sm:min-w-[1200px]">
+                    <table class="w-full text-sm min-w-[400px] sm:min-w-[1200px]">
                         <thead class="sticky top-0 bg-gray-900 z-10">
                             <tr>
                                 <th class="nodes-th cursor-pointer" data-sort="short_name">
@@ -492,7 +492,7 @@
                                 <th class="nodes-th cursor-pointer hidden sm:table-cell" data-sort="hw_model">
                                     <span>Hardware</span><span class="nodes-sort-icon"></span>
                                 </th>
-                                <th class="nodes-th cursor-pointer" data-sort="role">
+                                <th class="nodes-th cursor-pointer hidden sm:table-cell" data-sort="role">
                                     <span>Role</span><span class="nodes-sort-icon"></span>
                                 </th>
                                 <th class="nodes-th cursor-pointer" data-sort="last_heard">
@@ -504,7 +504,7 @@
                                 <th class="nodes-th cursor-pointer" data-sort="rx_rssi">
                                     <span>RSSI</span><span class="nodes-sort-icon"></span>
                                 </th>
-                                <th class="nodes-th cursor-pointer" data-sort="rx_snr">
+                                <th class="nodes-th cursor-pointer hidden sm:table-cell" data-sort="rx_snr">
                                     <span>SNR</span><span class="nodes-sort-icon"></span>
                                 </th>
                                 <th class="nodes-th cursor-pointer hidden sm:table-cell" data-sort="battery_level">
