@@ -282,7 +282,12 @@ func (c *Connection) Run(ctx context.Context) {
 		}
 		firstConnect = false
 		backoff = c.reconnectInterval
-		c.logger.Info("connected to node", "address", c.address)
+		c.logger.Info("connected to node",
+			"address", c.address,
+			"local_addr", conn.LocalAddr().String(),
+		)
+
+		connectedAt := time.Now()
 
 		// Request config from node
 		c.requestConfig()
@@ -290,11 +295,24 @@ func (c *Connection) Run(ctx context.Context) {
 		// Run read/write loops
 		err = c.runConnection(ctx, conn)
 		if err != nil {
-			c.logger.Error("node connection error", "error", err)
+			c.logger.Error("node connection error",
+				"error", err,
+				"uptime", time.Since(connectedAt).Round(time.Millisecond),
+			)
 		}
 
 		c.metrics.NodeConnected.Store(false)
 		c.close()
+
+		// Drain stale frames from toNode/fromNode channels so the next
+		// connection starts with a clean slate. Without this, leftover
+		// heartbeats or client frames queued just before disconnect would
+		// be sent to the node before want_config_id on reconnect.
+		drained := c.drainChannels()
+		if drained > 0 {
+			c.logger.Debug("drained stale frames before reconnect", "count", drained)
+		}
+
 		c.logger.Info("disconnected from node, reconnecting", "retry_in", backoff)
 
 		select {
@@ -308,12 +326,27 @@ func (c *Connection) Run(ctx context.Context) {
 
 func (c *Connection) dial(ctx context.Context) (net.Conn, error) {
 	d := net.Dialer{
-		Timeout: c.dialTimeout,
+		Timeout:   c.dialTimeout,
+		KeepAlive: 15 * time.Second,
 	}
 	conn, err := d.DialContext(ctx, "tcp", c.address)
 	if err != nil {
 		return nil, fmt.Errorf("dialing %s: %w", c.address, err)
 	}
+
+	// Set aggressive TCP keepalive parameters to keep ESP32 lwIP PCB alive.
+	// The ESP32 lwIP stack silently discards TCP PCBs after ~60-90s of
+	// inactivity. Sending empty TCP ACK probes every 15s prevents this.
+	// TCP_KEEPIDLE=15s, TCP_KEEPINTVL=5s, TCP_KEEPCNT=3.
+	if tc, ok := conn.(*net.TCPConn); ok {
+		if err := tc.SetKeepAlive(true); err != nil {
+			c.logger.Warn("failed to enable TCP keepalive", "error", err)
+		}
+		if err := tc.SetKeepAlivePeriod(15 * time.Second); err != nil {
+			c.logger.Warn("failed to set TCP keepalive period", "error", err)
+		}
+	}
+
 	return conn, nil
 }
 
@@ -324,6 +357,21 @@ func (c *Connection) close() {
 		_ = c.conn.Close()
 		c.conn = nil
 	}
+}
+
+// drainChannels discards any stale frames left in the toNode and fromNode
+// channels after a disconnect. Returns the total number of drained frames.
+func (c *Connection) drainChannels() int {
+	drained := 0
+	for len(c.toNode) > 0 {
+		<-c.toNode
+		drained++
+	}
+	for len(c.fromNode) > 0 {
+		<-c.fromNode
+		drained++
+	}
+	return drained
 }
 
 func (c *Connection) runConnection(ctx context.Context, conn net.Conn) error {
@@ -505,6 +553,10 @@ func (c *Connection) readLoop(ctx context.Context, conn net.Conn) error {
 					"breakdown", CountCacheFrameTypes(configFrames),
 					"nodes", len(nodeDir),
 				)
+
+				// Send the first heartbeat right after config handshake,
+				// matching the Python CLI behavior.
+				c.sendPostConfigHeartbeat()
 			}
 		default:
 			if collectingConfig {
@@ -538,6 +590,11 @@ func (c *Connection) writeLoop(ctx context.Context, conn net.Conn) error {
 // heartbeatLoop periodically sends a heartbeat to the node to prevent
 // read_timeout from triggering a reconnect when the mesh is quiet.
 // The Meshtastic node responds with QueueStatus, which resets the read deadline.
+//
+// The first heartbeat is sent from readLoop immediately after config_complete_id
+// is received (see sendPostConfigHeartbeat), matching the behavior of the
+// official Meshtastic Python CLI. This loop handles only the periodic
+// heartbeats after that.
 func (c *Connection) heartbeatLoop(ctx context.Context) error {
 	payload, err := proto.Marshal(&pb.ToRadio{
 		PayloadVariant: &pb.ToRadio_Heartbeat{
@@ -560,6 +617,24 @@ func (c *Connection) heartbeatLoop(ctx context.Context) error {
 			c.logger.Debug("heartbeat sent to node")
 		}
 	}
+}
+
+// sendPostConfigHeartbeat sends a single heartbeat to the node right after
+// config_complete_id is received. This matches the Python CLI behavior where
+// the first heartbeat follows immediately after the config handshake completes,
+// rather than being sent before or during config delivery.
+func (c *Connection) sendPostConfigHeartbeat() {
+	payload, err := proto.Marshal(&pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Heartbeat{
+			Heartbeat: &pb.Heartbeat{},
+		},
+	})
+	if err != nil {
+		c.logger.Error("failed to marshal post-config heartbeat", "error", err)
+		return
+	}
+	c.Send(payload)
+	c.logger.Debug("post-config heartbeat sent to node")
 }
 
 func (c *Connection) requestConfig() {
