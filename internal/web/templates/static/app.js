@@ -898,6 +898,7 @@
         findTraceBtns(nodeNum).forEach(function(btn) {
             btn.disabled = true;
             if (!btn.querySelector('.spinner')) {
+                btn.innerHTML = '';
                 var sp = document.createElement('span');
                 sp.className = 'spinner';
                 btn.appendChild(sp);

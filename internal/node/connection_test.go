@@ -787,20 +787,28 @@ func TestHeartbeatLoop_DisabledWhenZero(t *testing.T) {
 		writeFrame(t, nodeConn, frame)
 	}
 
-	// Wait a bit — no heartbeat should arrive.
+	// After config_complete_id, readLoop sends a post-config heartbeat
+	// regardless of HeartbeatInterval. Read and discard it.
+	postConfigHB := readFrame(t, nodeConn, 2*time.Second)
+	msg := &pb.ToRadio{}
+	if err := proto.Unmarshal(postConfigHB, msg); err != nil {
+		t.Fatalf("unmarshal post-config frame: %v", err)
+	}
+	if _, ok := msg.GetPayloadVariant().(*pb.ToRadio_Heartbeat); !ok {
+		t.Fatalf("expected post-config heartbeat, got %T", msg.GetPayloadVariant())
+	}
+
+	// Wait a bit — no periodic heartbeat should arrive because
+	// HeartbeatInterval=0 disables the heartbeatLoop goroutine.
 	_ = nodeConn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
 	_, readErr := protocol.ReadFrame(nodeConn)
 	if readErr == nil {
 		t.Fatal("expected no heartbeat frame when HeartbeatInterval=0, but got a frame")
 	}
-	// The error should be a timeout (deadline exceeded), not EOF.
-	if !errors.Is(readErr, errors.New("")) {
-		// Any error here is expected (timeout). We just verify no frame arrived.
-		var netErr net.Error
-		if !errors.As(readErr, &netErr) || !netErr.Timeout() {
-			// Got a non-timeout error — that's unexpected but the key assertion
-			// is that no heartbeat frame was read, which we already checked above.
-		}
+	// Any error here is expected (timeout). We just verify no frame arrived.
+	var netErr net.Error
+	if errors.As(readErr, &netErr) && !netErr.Timeout() {
+		t.Logf("unexpected non-timeout error: %v", readErr)
 	}
 
 	cancel()
