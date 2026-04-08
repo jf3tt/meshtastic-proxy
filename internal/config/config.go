@@ -25,6 +25,7 @@ type NodeConfig struct {
 	MaxReconnectInterval Duration `toml:"max_reconnect_interval"`
 	DialTimeout          Duration `toml:"dial_timeout"`
 	ReadTimeout          Duration `toml:"read_timeout"`
+	HeartbeatInterval    Duration `toml:"heartbeat_interval"`
 	FromBuffer           int      `toml:"from_buffer"`
 	ToBuffer             int      `toml:"to_buffer"`
 }
@@ -97,6 +98,7 @@ func DefaultConfig() *Config {
 			MaxReconnectInterval: Duration{30 * time.Second},
 			DialTimeout:          Duration{10 * time.Second},
 			ReadTimeout:          Duration{5 * time.Minute},
+			HeartbeatInterval:    Duration{1 * time.Minute},
 			FromBuffer:           256,
 			ToBuffer:             64,
 		},
@@ -203,6 +205,13 @@ func (c *Config) Validate() error {
 	}
 	if c.Node.ReadTimeout.Duration < 0 {
 		return fmt.Errorf("node.read_timeout must not be negative")
+	}
+	if c.Node.HeartbeatInterval.Duration < 0 {
+		return fmt.Errorf("node.heartbeat_interval must not be negative")
+	}
+	if c.Node.HeartbeatInterval.Duration > 0 && c.Node.ReadTimeout.Duration > 0 &&
+		c.Node.HeartbeatInterval.Duration >= c.Node.ReadTimeout.Duration {
+		return fmt.Errorf("node.heartbeat_interval must be less than read_timeout")
 	}
 	if c.Node.FromBuffer < 1 {
 		return fmt.Errorf("node.from_buffer must be at least 1")

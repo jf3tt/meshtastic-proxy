@@ -18,6 +18,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Node.ReadTimeout.Duration != 5*time.Minute {
 		t.Fatalf("unexpected default read timeout: %v", cfg.Node.ReadTimeout.Duration)
 	}
+	if cfg.Node.HeartbeatInterval.Duration != 1*time.Minute {
+		t.Fatalf("unexpected default heartbeat interval: %v", cfg.Node.HeartbeatInterval.Duration)
+	}
 	if cfg.Node.FromBuffer != 256 {
 		t.Fatalf("unexpected default from buffer: %d", cfg.Node.FromBuffer)
 	}
@@ -292,6 +295,32 @@ func TestValidation(t *testing.T) {
 			name:    "invalid logging format",
 			modify:  func(c *Config) { c.Logging.Format = "yaml" },
 			wantErr: true,
+		},
+		{
+			name:    "heartbeat interval negative",
+			modify:  func(c *Config) { c.Node.HeartbeatInterval = Duration{-1 * time.Second} },
+			wantErr: true,
+		},
+		{
+			name: "heartbeat interval exceeds read timeout",
+			modify: func(c *Config) {
+				c.Node.HeartbeatInterval = Duration{10 * time.Minute}
+				c.Node.ReadTimeout = Duration{5 * time.Minute}
+			},
+			wantErr: true,
+		},
+		{
+			name:    "heartbeat interval zero disabled",
+			modify:  func(c *Config) { c.Node.HeartbeatInterval = Duration{0} },
+			wantErr: false,
+		},
+		{
+			name: "heartbeat interval valid",
+			modify: func(c *Config) {
+				c.Node.HeartbeatInterval = Duration{1 * time.Minute}
+				c.Node.ReadTimeout = Duration{5 * time.Minute}
+			},
+			wantErr: false,
 		},
 	}
 

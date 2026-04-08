@@ -22,6 +22,12 @@ dial_timeout = "10s"
 # Read timeout for the node connection (triggers reconnect if no data received)
 read_timeout = "5m"
 
+# Heartbeat interval — proxy sends a heartbeat to the node at this interval
+# to prevent read_timeout from triggering a reconnect when the mesh is quiet.
+# The node responds with QueueStatus, resetting the read deadline.
+# Must be less than read_timeout. Set to "0s" to disable.
+heartbeat_interval = "1m"
+
 # Channel buffer sizes for node communication
 from_buffer = 256   # FromRadio frames (node -> proxy)
 to_buffer = 64      # ToRadio frames (proxy -> node)

@@ -56,6 +56,7 @@ func main() {
 		MaxReconnectInterval: cfg.Node.MaxReconnectInterval.Duration,
 		DialTimeout:          cfg.Node.DialTimeout.Duration,
 		ReadTimeout:          cfg.Node.ReadTimeout.Duration,
+		HeartbeatInterval:    cfg.Node.HeartbeatInterval.Duration,
 		FromBuffer:           cfg.Node.FromBuffer,
 		ToBuffer:             cfg.Node.ToBuffer,
 		Metrics:              m,

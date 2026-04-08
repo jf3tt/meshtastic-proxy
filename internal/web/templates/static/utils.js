@@ -24,7 +24,7 @@ var Mesh = (function () {
     // ── Node hex ID ─────────────────────────────────────────────────
     function nodeHex(n) {
         if (!n) return '';
-        return '!' + n.toString(16).padStart(8, '0');
+        return '!' + (n >>> 0).toString(16).padStart(8, '0');
     }
 
     // ── Node name (HTML) — returns <span> with tooltip ──────────────

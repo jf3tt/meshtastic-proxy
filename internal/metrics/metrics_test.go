@@ -1408,6 +1408,76 @@ func TestLastHeard_NotUpdatedBySetNodeDirectory(t *testing.T) {
 	}
 }
 
+func TestSeenRealtime_PreservedBySetNodeDirectory(t *testing.T) {
+	m := New(10, 300)
+
+	// Initial directory from node config — SeenRealtime is false.
+	m.SetNodeDirectory(map[uint32]NodeEntry{
+		0x11: {ShortName: "A"},
+		0x22: {ShortName: "B"},
+	})
+
+	// Simulate a real-time position update that sets SeenRealtime on node 0x11.
+	m.UpdateNodePosition(PositionUpdate{NodeNum: 0x11, Latitude: 1.0, Longitude: 2.0})
+
+	// Verify SeenRealtime was set.
+	if !m.NodeDirectory()[0x11].SeenRealtime {
+		t.Fatal("expected SeenRealtime=true after UpdateNodePosition")
+	}
+
+	// Simulate reconnect: SetNodeDirectory replaces directory with fresh data.
+	m.SetNodeDirectory(map[uint32]NodeEntry{
+		0x11: {ShortName: "A-new"},
+		0x22: {ShortName: "B-new"},
+	})
+
+	dir := m.NodeDirectory()
+	if !dir[0x11].SeenRealtime {
+		t.Error("SeenRealtime should be preserved for node 0x11 after SetNodeDirectory")
+	}
+	if dir[0x22].SeenRealtime {
+		t.Error("SeenRealtime should remain false for node 0x22 (never seen in real time)")
+	}
+	// Identity fields should be updated to new values.
+	if dir[0x11].ShortName != "A-new" {
+		t.Errorf("ShortName should be updated, got %q", dir[0x11].ShortName)
+	}
+}
+
+func TestIsFavorite_PreservedBySetNodeDirectory(t *testing.T) {
+	m := New(10, 300)
+
+	// Initial directory.
+	m.SetNodeDirectory(map[uint32]NodeEntry{
+		0x11: {ShortName: "A"},
+		0x22: {ShortName: "B"},
+	})
+
+	// User marks node 0x11 as favorite.
+	if !m.SetFavorite(0x11, true) {
+		t.Fatal("SetFavorite should return true for existing node")
+	}
+
+	// Verify IsFavorite was set.
+	if !m.NodeDirectory()[0x11].IsFavorite {
+		t.Fatal("expected IsFavorite=true after SetFavorite")
+	}
+
+	// Simulate reconnect: SetNodeDirectory replaces directory.
+	m.SetNodeDirectory(map[uint32]NodeEntry{
+		0x11: {ShortName: "A-new"},
+		0x22: {ShortName: "B-new"},
+	})
+
+	dir := m.NodeDirectory()
+	if !dir[0x11].IsFavorite {
+		t.Error("IsFavorite should be preserved for node 0x11 after SetNodeDirectory")
+	}
+	if dir[0x22].IsFavorite {
+		t.Error("IsFavorite should remain false for node 0x22 (never favorited)")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Traceroute history tests
 // ---------------------------------------------------------------------------
