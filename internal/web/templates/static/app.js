@@ -368,14 +368,14 @@
             <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap"><code class="font-mono text-xs">${timeStr}</code></td>
             <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap">${dirTag}</td>
             <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap"><code class="font-mono text-xs">${Mesh.esc(msg.type)}</code></td>
-            <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap"><code class="font-mono text-xs text-gray-400">${Mesh.esc(msg.port_num)}</code></td>
+            <td class="hidden sm:table-cell px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap"><code class="font-mono text-xs text-gray-400">${Mesh.esc(msg.port_num)}</code></td>
             <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap">${fromHTML}</td>
             <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap">${toHTML}</td>
-            <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap"><code class="font-mono text-xs">${hopsStr}</code></td>
+            <td class="hidden sm:table-cell px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap"><code class="font-mono text-xs">${hopsStr}</code></td>
             <td class="px-3 py-1.5 border-b border-gray-800/50 text-right tabular-nums whitespace-nowrap"><code class="font-mono text-xs">${rssiStr}</code></td>
             <td class="px-3 py-1.5 border-b border-gray-800/50 text-right tabular-nums whitespace-nowrap"><code class="font-mono text-xs">${snrStr}</code></td>
-            <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap">${relayBadges}</td>
-            <td class="px-3 py-1.5 border-b border-gray-800/50 text-right tabular-nums whitespace-nowrap">${msg.size}B</td>
+            <td class="hidden sm:table-cell px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap">${relayBadges}</td>
+            <td class="hidden sm:table-cell px-3 py-1.5 border-b border-gray-800/50 text-right tabular-nums whitespace-nowrap">${msg.size}B</td>
             <td class="px-3 py-1.5 border-b border-gray-800/50 max-w-xs truncate" title="${Mesh.esc(msg.payload || '')}"><span class="text-xs text-gray-300">${Mesh.esc(msg.payload || '')}</span></td>
         `;
 
