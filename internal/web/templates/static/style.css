@@ -1,5 +1,51 @@
 /* Custom styles — Tailwind handles the rest */
 
+/* ─── Responsive utility classes (not in compiled Tailwind output) ──── */
+/* These are used in JS-rendered HTML where Tailwind scanner can't detect them. */
+@media (min-width: 640px) {
+    .sm\:table-cell { display: table-cell !important; }
+    .sm\:inline { display: inline !important; }
+    .sm\:flex-none { flex: none !important; }
+    .sm\:flex-col { flex-direction: column !important; }
+    .sm\:flex-row { flex-direction: row !important; }
+    .sm\:w-44 { width: 11rem !important; }
+    .sm\:w-auto { width: auto !important; }
+    .sm\:max-w-xs { max-width: 20rem !important; }
+    .sm\:order-none { order: 0 !important; }
+    .sm\:border-b-0 { border-bottom-width: 0px !important; }
+    .sm\:border-r { border-right-width: 1px !important; }
+    .sm\:overflow-x-hidden { overflow-x: hidden !important; }
+    .sm\:overflow-y-auto { overflow-y: auto !important; }
+    .sm\:py-1 { padding-top: 0.25rem !important; padding-bottom: 0.25rem !important; }
+    .sm\:px-0 { padding-left: 0 !important; padding-right: 0 !important; }
+    .sm\:px-4 { padding-left: 1rem !important; padding-right: 1rem !important; }
+    .sm\:px-6 { padding-left: 1.5rem !important; padding-right: 1.5rem !important; }
+    .sm\:py-3 { padding-top: 0.75rem !important; padding-bottom: 0.75rem !important; }
+    .sm\:gap-3 { gap: 0.75rem !important; }
+    .sm\:mt-2 { margin-top: 0.5rem !important; }
+    .sm\:space-y-px > :not(:first-child) { margin-top: 1px !important; }
+    .sm\:min-w-\[1100px\] { min-width: 1100px !important; }
+    .sm\:min-w-\[1200px\] { min-width: 1200px !important; }
+    .sm\:w-48 { width: 12rem !important; }
+    .sm\:block { display: block !important; }
+    .sm\:flex-nowrap { flex-wrap: nowrap !important; }
+}
+
+/* ─── Tab container dynamic height ──────────────────────────────────── */
+/* Uses dvh (dynamic viewport height) for mobile browsers that hide the
+   address bar on scroll.  Falls back to vh for older browsers. */
+.tab-container {
+    height: calc(100vh - 140px);
+    height: calc(100dvh - 140px);
+}
+@media (max-width: 639px) {
+    /* Header is taller on mobile (tabs wrap to second row) */
+    .tab-container {
+        height: calc(100vh - 180px);
+        height: calc(100dvh - 180px);
+    }
+}
+
 /* Highlight animation for new SSE message rows */
 @keyframes row-flash {
     from { background-color: rgba(99, 102, 241, 0.15); }
@@ -309,3 +355,52 @@
 .th-hop-start { color: #34d399; }
 .th-hop-end { color: #f59e0b; }
 .th-hops-badge { font-size: 9px; color: #06b6d4; background: rgba(6,182,212,0.1); border: 1px solid rgba(6,182,212,0.2); padding: 0 5px; border-radius: 4px; margin-left: auto; flex-shrink: 0; }
+
+/* ─── Mobile responsive adaptations ─────────────────────────────────── */
+
+@media (max-width: 639px) {
+    /* Map filter overlay: full-width with small margins */
+    .map-filters {
+        left: 10px;
+        right: 10px;
+        width: auto;
+    }
+
+    /* Heatmap legend: full-width at bottom */
+    .hm-legend {
+        left: 10px;
+        right: 10px;
+        bottom: 10px;
+    }
+    .hm-legend-bar {
+        width: 100%;
+    }
+
+    /* Node popup: constrain width, reduce padding */
+    .np { min-width: 180px; max-width: 260px; }
+    .leaflet-popup-content { margin: 8px 12px; font-size: 12px; }
+
+    /* Chat channel buttons: horizontal layout on mobile */
+    .chat-channel-btn {
+        width: auto !important;
+        white-space: nowrap;
+        flex-shrink: 0;
+    }
+
+    /* Nodes table: compact padding on mobile */
+    .nodes-td { padding: 4px 6px; font-size: 11px; }
+    .nodes-th { padding: 6px 6px; }
+
+    /* Trace history entries: tighter layout */
+    .th-entry { gap: 4px; padding: 4px 8px; font-size: 10px; }
+    .th-time { min-width: 50px; font-size: 10px; }
+
+    /* Node actions dropdown: ensure it stays on screen */
+    .na-dropdown { right: auto; left: 0; min-width: 160px; }
+
+    /* Status cards: smaller padding */
+    .bg-gray-900.border.border-gray-800.rounded-xl.p-4 { padding: 0.75rem; }
+
+    /* Reduce body padding */
+    body > .max-w-7xl { padding-left: 0.5rem; padding-right: 0.5rem; }
+}

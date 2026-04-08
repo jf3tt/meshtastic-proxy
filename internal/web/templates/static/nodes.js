@@ -374,14 +374,14 @@
         return '<tr class="hover:bg-gray-800/30 transition-colors" data-nodenum="' + numStr + '">'
             + '<td class="nodes-td">' + nameCell + '</td>'
             + '<td class="nodes-td">' + idCell + '</td>'
-            + '<td class="nodes-td">' + hwCell + '</td>'
+            + '<td class="nodes-td hidden sm:table-cell">' + hwCell + '</td>'
             + '<td class="nodes-td">' + roleCell + '</td>'
             + '<td class="nodes-td">' + lhCell + '</td>'
-            + '<td class="nodes-td text-center">' + hopsCell + '</td>'
+            + '<td class="nodes-td text-center hidden sm:table-cell">' + hopsCell + '</td>'
             + '<td class="nodes-td text-right">' + rssiCell + '</td>'
             + '<td class="nodes-td text-right">' + snrCell + '</td>'
-            + '<td class="nodes-td">' + battCell + '</td>'
-            + '<td class="nodes-td">' + coordCell + '</td>'
+            + '<td class="nodes-td hidden sm:table-cell">' + battCell + '</td>'
+            + '<td class="nodes-td hidden sm:table-cell">' + coordCell + '</td>'
             + '<td class="nodes-td">' + actionsCell + '</td>'
             + '</tr>';
     }

@@ -17,44 +17,47 @@
     <div class="max-w-7xl mx-auto px-4 py-6 sm:px-6 lg:px-8">
 
         <!-- Header -->
-        <header class="flex items-center gap-4 mb-6 pb-4 border-b border-gray-800">
-            <h1 class="text-xl font-semibold tracking-tight">Meshtastic TCP Proxy</h1>
-            <span id="node-badge" class="text-xs font-semibold px-3 py-1 rounded-full uppercase tracking-wider
-                {{if .Metrics.NodeConnected}}
-                    bg-emerald-500/15 text-emerald-400 border border-emerald-500/30
-                {{else}}
-                    bg-red-500/15 text-red-400 border border-red-500/30
-                {{end}}">
-                {{if .Metrics.NodeConnected}}Connected{{else}}Disconnected{{end}}
-            </span>
+        <header class="mb-6 pb-4 border-b border-gray-800">
+            <!-- Top row: title + badge + controls -->
+            <div class="flex items-center gap-3 flex-wrap">
+                <h1 class="text-xl font-semibold tracking-tight">Meshtastic TCP Proxy</h1>
+                <span id="node-badge" class="text-xs font-semibold px-3 py-1 rounded-full uppercase tracking-wider
+                    {{if .Metrics.NodeConnected}}
+                        bg-emerald-500/15 text-emerald-400 border border-emerald-500/30
+                    {{else}}
+                        bg-red-500/15 text-red-400 border border-red-500/30
+                    {{end}}">
+                    {{if .Metrics.NodeConnected}}Connected{{else}}Disconnected{{end}}
+                </span>
 
-            <!-- Tab Navigation -->
-            <nav class="flex items-center gap-1 ml-4 bg-gray-900 rounded-lg p-0.5 border border-gray-800">
+                <div class="ml-auto flex items-center gap-3">
+                    <button id="pause-btn"
+                        class="text-xs font-semibold px-3 py-1 rounded-lg bg-gray-800 border border-gray-700 text-gray-300 hover:border-indigo-500/50 hover:text-indigo-400 transition-colors"
+                        title="Pause/resume live updates">Live</button>
+                    <span id="sse-indicator" class="w-2 h-2 rounded-full bg-gray-600" title="SSE disconnected"></span>
+                    <span id="sse-label" class="text-xs text-gray-500 hidden sm:inline">Connecting...</span>
+                </div>
+            </div>
+
+            <!-- Tab Navigation — second row on mobile, inline on sm+ -->
+            <nav class="flex items-center gap-1 mt-3 sm:mt-2 bg-gray-900 rounded-lg p-0.5 border border-gray-800 w-full sm:w-auto overflow-x-auto">
                 <button id="tab-btn-dashboard" onclick="switchTab('dashboard')"
-                    class="tab-btn text-xs font-semibold px-3 py-1 rounded-md transition-colors bg-gray-800 text-gray-100">
+                    class="tab-btn text-xs font-semibold px-3 py-1.5 rounded-md transition-colors bg-gray-800 text-gray-100 flex-1 sm:flex-none whitespace-nowrap">
                     Dashboard
                 </button>
                 <button id="tab-btn-map" onclick="switchTab('map')"
-                    class="tab-btn text-xs font-semibold px-3 py-1 rounded-md transition-colors text-gray-400 hover:text-gray-200">
+                    class="tab-btn text-xs font-semibold px-3 py-1.5 rounded-md transition-colors text-gray-400 hover:text-gray-200 flex-1 sm:flex-none whitespace-nowrap">
                     Map
                 </button>
                 <button id="tab-btn-chat" onclick="switchTab('chat')"
-                    class="tab-btn text-xs font-semibold px-3 py-1 rounded-md transition-colors text-gray-400 hover:text-gray-200">
+                    class="tab-btn text-xs font-semibold px-3 py-1.5 rounded-md transition-colors text-gray-400 hover:text-gray-200 flex-1 sm:flex-none whitespace-nowrap">
                     Chat
                 </button>
                 <button id="tab-btn-nodes" onclick="switchTab('nodes')"
-                    class="tab-btn text-xs font-semibold px-3 py-1 rounded-md transition-colors text-gray-400 hover:text-gray-200">
+                    class="tab-btn text-xs font-semibold px-3 py-1.5 rounded-md transition-colors text-gray-400 hover:text-gray-200 flex-1 sm:flex-none whitespace-nowrap">
                     Nodes
                 </button>
             </nav>
-
-            <div class="ml-auto flex items-center gap-3">
-                <button id="pause-btn"
-                    class="text-xs font-semibold px-3 py-1 rounded-lg bg-gray-800 border border-gray-700 text-gray-300 hover:border-indigo-500/50 hover:text-indigo-400 transition-colors"
-                    title="Pause/resume live updates">Live</button>
-                <span id="sse-indicator" class="w-2 h-2 rounded-full bg-gray-600" title="SSE disconnected"></span>
-                <span id="sse-label" class="text-xs text-gray-500">Connecting...</span>
-            </div>
         </header>
 
         <!-- ==================== DASHBOARD TAB ==================== -->
@@ -146,29 +149,29 @@
 
         <!-- Recent Messages -->
         <section class="bg-gray-900 border border-gray-800 rounded-xl p-4 mb-6">
-            <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center flex-wrap gap-2 justify-between mb-3">
                 <h2 class="text-sm font-semibold">Recent Messages</h2>
                 <div class="flex items-center gap-3">
                     <input id="msg-filter" type="text" placeholder="Filter messages..."
-                        class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1 text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:border-indigo-500/50 w-48">
+                        class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1 text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:border-indigo-500/50 w-36 sm:w-48">
                     <span id="msg-count" class="text-xs text-gray-500">{{len .Metrics.Messages}} messages</span>
                 </div>
             </div>
             <div class="overflow-x-auto max-h-[500px] overflow-y-auto">
-                <table class="w-full text-sm min-w-[1100px]">
+                <table class="w-full text-sm min-w-[600px] sm:min-w-[1100px]">
                     <thead class="sticky top-0 bg-gray-900">
                         <tr>
                             <th class="text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">Time</th>
                             <th class="text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">Dir</th>
                             <th class="text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">Type</th>
-                            <th class="text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">Port</th>
+                            <th class="hidden sm:table-cell text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">Port</th>
                             <th class="text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">From</th>
                             <th class="text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">To</th>
-                            <th class="text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">Hops</th>
+                            <th class="hidden sm:table-cell text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">Hops</th>
                             <th class="text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">RSSI</th>
                             <th class="text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">SNR</th>
-                            <th class="text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">Relay</th>
-                            <th class="text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">Size</th>
+                            <th class="hidden sm:table-cell text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">Relay</th>
+                            <th class="hidden sm:table-cell text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">Size</th>
                             <th class="text-left text-xs font-semibold uppercase tracking-wider text-gray-500 px-3 py-2 border-b border-gray-800">Payload</th>
                         </tr>
                     </thead>
@@ -188,7 +191,7 @@
                             <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap">
                                 <code class="font-mono text-xs">{{.Type}}</code>
                             </td>
-                            <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap">
+                            <td class="hidden sm:table-cell px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap">
                                 <code class="font-mono text-xs text-gray-400">{{.PortNum}}</code>
                             </td>
                             <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap">
@@ -197,7 +200,7 @@
                             <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap">
                                 {{nodeName .To $.Metrics.NodeDir}}
                             </td>
-                            <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap">
+                            <td class="hidden sm:table-cell px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap">
                                 {{if or .HopLimit .HopStart}}
                                     <code class="font-mono text-xs">{{.HopLimit}}/{{.HopStart}}</code>
                                 {{else}}
@@ -218,7 +221,7 @@
                                     <span class="text-gray-600">&mdash;</span>
                                 {{end}}
                             </td>
-                            <td class="px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap">
+                            <td class="hidden sm:table-cell px-3 py-1.5 border-b border-gray-800/50 whitespace-nowrap">
                                 {{if .ViaMqtt}}
                                     <span class="inline-block text-[10px] font-bold px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-400 border border-purple-500/30 font-mono">MQTT</span>
                                 {{end}}
@@ -229,7 +232,7 @@
                                     <span class="text-gray-600">&mdash;</span>
                                 {{end}}
                             </td>
-                            <td class="px-3 py-1.5 border-b border-gray-800/50 text-right tabular-nums whitespace-nowrap">
+                            <td class="hidden sm:table-cell px-3 py-1.5 border-b border-gray-800/50 text-right tabular-nums whitespace-nowrap">
                                 {{.Size}}B
                             </td>
                             <td class="px-3 py-1.5 border-b border-gray-800/50 max-w-xs truncate" title="{{.Payload}}">
@@ -246,7 +249,7 @@
 
         <!-- ==================== MAP TAB ==================== -->
         <div id="tab-map" class="hidden">
-            <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden" style="height: calc(100vh - 140px); position: relative;">
+            <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden tab-container" style="position: relative;">
                 <div id="map" style="width: 100%; height: 100%;"></div>
 
                 <!-- Search & Filters overlay -->
@@ -327,14 +330,14 @@
 
         <!-- ==================== CHAT TAB ==================== -->
         <div id="tab-chat" class="hidden">
-            <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden flex flex-row" style="height: calc(100vh - 140px);">
+            <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden flex flex-col sm:flex-row tab-container">
 
-                <!-- Channel sidebar -->
-                <aside class="w-44 flex-shrink-0 border-r border-gray-800 bg-gray-950/60 flex flex-col">
-                    <div class="px-3 py-2.5 border-b border-gray-800">
+                <!-- Channel sidebar: horizontal scroll on mobile, vertical on sm+ -->
+                <aside class="flex-shrink-0 border-b sm:border-b-0 sm:border-r border-gray-800 bg-gray-950/60 flex flex-row sm:flex-col sm:w-44">
+                    <div class="hidden sm:block px-3 py-2.5 border-b border-gray-800">
                         <span class="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Channels</span>
                     </div>
-                    <div id="chat-channel-list" class="flex-1 min-h-0 overflow-y-auto py-1 space-y-px">
+                    <div id="chat-channel-list" class="flex flex-row sm:flex-col flex-1 min-h-0 overflow-x-auto sm:overflow-x-hidden sm:overflow-y-auto py-1 sm:py-1 px-1 sm:px-0 gap-px sm:gap-0 sm:space-y-px">
                         <!-- Channel buttons rendered by JS -->
                     </div>
                 </aside>
@@ -392,10 +395,10 @@
 
         <!-- ==================== NODES TAB ==================== -->
         <div id="tab-nodes" class="hidden">
-            <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden" style="height: calc(100vh - 140px); display: flex; flex-direction: column;">
+            <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden tab-container" style="display: flex; flex-direction: column;">
 
                 <!-- Header bar -->
-                <div class="flex items-center gap-3 px-4 py-3 border-b border-gray-800 bg-gray-950/60 flex-shrink-0">
+                <div class="flex items-center flex-wrap gap-2 sm:gap-3 px-3 sm:px-4 py-2 sm:py-3 border-b border-gray-800 bg-gray-950/60 flex-shrink-0">
                     <!-- Toggle: All / Realtime -->
                     <div class="flex items-center bg-gray-800 rounded-lg p-0.5 border border-gray-700">
                         <button id="nodes-filter-all" onclick="setNodesFilter('all')"
@@ -409,7 +412,7 @@
                     </div>
 
                     <!-- Search -->
-                    <div class="relative flex-1 max-w-xs">
+                    <div class="relative flex-1 min-w-[140px] sm:max-w-xs order-last sm:order-none w-full sm:w-auto">
                         <svg class="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500 pointer-events-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
                         <input id="nodes-search" type="text" placeholder="Search nodes..."
                             class="w-full bg-gray-800 border border-gray-700 rounded-lg pl-8 pr-3 py-1 text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:border-indigo-500/50">
@@ -477,7 +480,7 @@
 
                 <!-- Table -->
                 <div id="nodes-table-wrap" class="flex-1 min-h-0 overflow-y-auto overflow-x-auto">
-                    <table class="w-full text-sm min-w-[1200px]">
+                    <table class="w-full text-sm min-w-[640px] sm:min-w-[1200px]">
                         <thead class="sticky top-0 bg-gray-900 z-10">
                             <tr>
                                 <th class="nodes-th cursor-pointer" data-sort="short_name">
@@ -486,7 +489,7 @@
                                 <th class="nodes-th cursor-pointer" data-sort="user_id">
                                     <span>ID</span><span class="nodes-sort-icon"></span>
                                 </th>
-                                <th class="nodes-th cursor-pointer" data-sort="hw_model">
+                                <th class="nodes-th cursor-pointer hidden sm:table-cell" data-sort="hw_model">
                                     <span>Hardware</span><span class="nodes-sort-icon"></span>
                                 </th>
                                 <th class="nodes-th cursor-pointer" data-sort="role">
@@ -495,7 +498,7 @@
                                 <th class="nodes-th cursor-pointer" data-sort="last_heard">
                                     <span>Last Heard</span><span class="nodes-sort-icon"></span>
                                 </th>
-                                <th class="nodes-th cursor-pointer" data-sort="hops_away">
+                                <th class="nodes-th cursor-pointer hidden sm:table-cell" data-sort="hops_away">
                                     <span>Hops</span><span class="nodes-sort-icon"></span>
                                 </th>
                                 <th class="nodes-th cursor-pointer" data-sort="rx_rssi">
@@ -504,10 +507,10 @@
                                 <th class="nodes-th cursor-pointer" data-sort="rx_snr">
                                     <span>SNR</span><span class="nodes-sort-icon"></span>
                                 </th>
-                                <th class="nodes-th cursor-pointer" data-sort="battery_level">
+                                <th class="nodes-th cursor-pointer hidden sm:table-cell" data-sort="battery_level">
                                     <span>Battery</span><span class="nodes-sort-icon"></span>
                                 </th>
-                                <th class="nodes-th" style="cursor:default;">
+                                <th class="nodes-th hidden sm:table-cell" style="cursor:default;">
                                     <span>Coordinates</span>
                                 </th>
                                 <th class="nodes-th" style="cursor:default; width:50px;">
