@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, dev]
   pull_request:
     branches: [main, master]
 
@@ -111,6 +111,7 @@ jobs:
             type=ref,event=pr
             type=sha,prefix=
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6

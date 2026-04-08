@@ -545,7 +545,7 @@ func (c *Connection) heartbeatLoop(ctx context.Context) error {
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("marshalling heartbeat: %w", err)
+		return fmt.Errorf("marshaling heartbeat: %w", err)
 	}
 
 	ticker := time.NewTicker(c.heartbeatInterval)

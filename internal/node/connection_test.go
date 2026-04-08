@@ -793,14 +793,10 @@ func TestHeartbeatLoop_DisabledWhenZero(t *testing.T) {
 	if readErr == nil {
 		t.Fatal("expected no heartbeat frame when HeartbeatInterval=0, but got a frame")
 	}
-	// The error should be a timeout (deadline exceeded), not EOF.
-	if !errors.Is(readErr, errors.New("")) {
-		// Any error here is expected (timeout). We just verify no frame arrived.
-		var netErr net.Error
-		if !errors.As(readErr, &netErr) || !netErr.Timeout() {
-			// Got a non-timeout error — that's unexpected but the key assertion
-			// is that no heartbeat frame was read, which we already checked above.
-		}
+	// Any error here is expected (timeout). We just verify no frame arrived.
+	var netErr net.Error
+	if errors.As(readErr, &netErr) && !netErr.Timeout() {
+		t.Logf("unexpected non-timeout error: %v", readErr)
 	}
 
 	cancel()
