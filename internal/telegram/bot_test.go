@@ -248,9 +248,9 @@ func TestSendMessage(t *testing.T) {
 	}
 }
 
-// TestRun_ForwardsIncomingMessages tests the full event loop: metrics publish
-// a chat_message event and the bot forwards it to Telegram.
-func TestRun_ForwardsIncomingMessages(t *testing.T) {
+// TestRun_ForwardsMessages tests the full event loop: metrics publish
+// chat_message events and the bot forwards both incoming and outgoing to Telegram.
+func TestRun_ForwardsMessages(t *testing.T) {
 	var mu sync.Mutex
 	var sentMessages []sendMessageRequest
 
@@ -314,7 +314,7 @@ func TestRun_ForwardsIncomingMessages(t *testing.T) {
 		Direction: "incoming",
 	})
 
-	// Publish an outgoing message (should be ignored)
+	// Publish an outgoing message (should also be forwarded)
 	m.RecordChatMessage(metrics.ChatMessage{
 		From:      0xf9b0552c,
 		FromName:  "jfett",
@@ -323,7 +323,7 @@ func TestRun_ForwardsIncomingMessages(t *testing.T) {
 		Direction: "outgoing",
 	})
 
-	// Wait for message to be processed
+	// Wait for messages to be processed
 	time.Sleep(200 * time.Millisecond)
 	cancel()
 
@@ -335,14 +335,14 @@ func TestRun_ForwardsIncomingMessages(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	if len(sentMessages) != 1 {
-		t.Fatalf("expected 1 sent message, got %d", len(sentMessages))
+	if len(sentMessages) != 2 {
+		t.Fatalf("expected 2 sent messages, got %d", len(sentMessages))
 	}
 	if !strings.Contains(sentMessages[0].Text, "Hello from mesh!") {
 		t.Errorf("message text = %q, want to contain 'Hello from mesh!'", sentMessages[0].Text)
 	}
-	if !strings.Contains(sentMessages[0].Text, "jfett") {
-		t.Errorf("message text = %q, want to contain 'jfett'", sentMessages[0].Text)
+	if !strings.Contains(sentMessages[1].Text, "Outgoing message") {
+		t.Errorf("message text = %q, want to contain 'Outgoing message'", sentMessages[1].Text)
 	}
 }
 

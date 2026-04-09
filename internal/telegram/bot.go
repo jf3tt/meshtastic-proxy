@@ -121,10 +121,6 @@ func (b *Bot) Run(ctx context.Context) error {
 			if !ok {
 				continue
 			}
-			// Only forward incoming messages (from mesh to proxy)
-			if msg.Direction != "incoming" {
-				continue
-			}
 			// Only forward messages from allowed channels
 			if !b.channels[msg.Channel] {
 				continue
