@@ -412,7 +412,7 @@ func (p *Proxy) echoToOtherClients(payload []byte, sender *Client) {
 	// proxy fills it in so that iOS (which sorts messages by RxTime) shows
 	// them in chronological order.
 	if meshPkt.GetRxTime() == 0 {
-		meshPkt.RxTime = uint32(time.Now().Unix())
+		meshPkt.RxTime = uint32(time.Now().Unix()) //nolint:gosec // G115: Unix timestamp fits uint32 until 2106
 	}
 
 	fromRadio := &pb.FromRadio{
@@ -486,7 +486,7 @@ func (p *Proxy) toRadioToFromRadio(payload []byte) []byte {
 	// caching the proxy fills it in so that iOS (which sorts messages by
 	// RxTime) shows them in chronological order during chat replay.
 	if meshPkt.GetRxTime() == 0 {
-		meshPkt.RxTime = uint32(time.Now().Unix())
+		meshPkt.RxTime = uint32(time.Now().Unix()) //nolint:gosec // G115: Unix timestamp fits uint32 until 2106
 	}
 
 	fromRadio := &pb.FromRadio{
