@@ -3235,3 +3235,177 @@ func TestChatReplay_AfterIOSNodesPhase_WithACK(t *testing.T) {
 		t.Error("routing ACK was NOT replayed after nodes-only phase")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// RxTime population for outgoing messages
+// ---------------------------------------------------------------------------
+
+func TestToRadioToFromRadio_SetsRxTime(t *testing.T) {
+	p, _ := newTestProxy(t, nil, 100)
+
+	before := uint32(time.Now().Unix())
+	toRadioPayload := buildToRadioTextMessage(t, 0, 0xFFFFFFFF, "hello")
+	result := p.toRadioToFromRadio(toRadioPayload)
+	after := uint32(time.Now().Unix())
+
+	if result == nil {
+		t.Fatal("toRadioToFromRadio returned nil")
+	}
+
+	fr := &pb.FromRadio{}
+	if err := proto.Unmarshal(result, fr); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	rxTime := fr.GetPacket().GetRxTime()
+	if rxTime < before || rxTime > after {
+		t.Errorf("RxTime = %d, want in [%d, %d]", rxTime, before, after)
+	}
+}
+
+func TestToRadioToFromRadio_PreservesExistingRxTime(t *testing.T) {
+	p, _ := newTestProxy(t, nil, 100)
+
+	existingRxTime := uint32(1700000000) // some past timestamp
+	toRadio := marshalToRadio(t, &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From:   0x12345678,
+				To:     0xFFFFFFFF,
+				Id:     99,
+				RxTime: existingRxTime,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum: pb.PortNum_TEXT_MESSAGE_APP,
+						Payload: []byte("with rxtime"),
+					},
+				},
+			},
+		},
+	})
+
+	result := p.toRadioToFromRadio(toRadio)
+	if result == nil {
+		t.Fatal("toRadioToFromRadio returned nil")
+	}
+
+	fr := &pb.FromRadio{}
+	if err := proto.Unmarshal(result, fr); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if fr.GetPacket().GetRxTime() != existingRxTime {
+		t.Errorf("RxTime = %d, want %d (should not be overwritten)", fr.GetPacket().GetRxTime(), existingRxTime)
+	}
+}
+
+func TestEchoToOtherClients_SetsRxTime(t *testing.T) {
+	mockNode := newMockNodeConn(nil)
+	mockNode.myNodeNum = 0x12345678
+	m := metrics.New(10, 300)
+	p := New(Options{
+		ListenAddr:       ":0",
+		MaxClients:       10,
+		ClientSendBuffer: 256,
+		IOSNodeInfoDelay: 50 * time.Millisecond,
+		NodeConn:         mockNode,
+		Metrics:          m,
+		Logger:           slog.Default(),
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, clientA := newTestConnPair(t)
+	clientObjA := NewClient(clientA, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+	clientObjA.Start(ctx)
+	p.registerClient(clientObjA)
+
+	serverB, clientB := newTestConnPair(t)
+	clientObjB := NewClient(clientB, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+	clientObjB.Start(ctx)
+	p.registerClient(clientObjB)
+
+	before := uint32(time.Now().Unix())
+	toRadioPayload := marshalToRadio(t, &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From: 0x12345678,
+				To:   0xFFFFFFFF,
+				Id:   77,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum: pb.PortNum_TEXT_MESSAGE_APP,
+						Payload: []byte("echo test"),
+					},
+				},
+			},
+		},
+	})
+	p.echoToOtherClients(toRadioPayload, clientObjA)
+	after := uint32(time.Now().Unix())
+
+	got := readFrame(t, serverB, 2*time.Second)
+	fr := &pb.FromRadio{}
+	if err := proto.Unmarshal(got, fr); err != nil {
+		t.Fatalf("unmarshal echo: %v", err)
+	}
+	rxTime := fr.GetPacket().GetRxTime()
+	if rxTime < before || rxTime > after {
+		t.Errorf("RxTime = %d, want in [%d, %d]", rxTime, before, after)
+	}
+}
+
+func TestEchoToOtherClients_PreservesExistingRxTime(t *testing.T) {
+	mockNode := newMockNodeConn(nil)
+	mockNode.myNodeNum = 0x12345678
+	m := metrics.New(10, 300)
+	p := New(Options{
+		ListenAddr:       ":0",
+		MaxClients:       10,
+		ClientSendBuffer: 256,
+		IOSNodeInfoDelay: 50 * time.Millisecond,
+		NodeConn:         mockNode,
+		Metrics:          m,
+		Logger:           slog.Default(),
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, clientA := newTestConnPair(t)
+	clientObjA := NewClient(clientA, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+	clientObjA.Start(ctx)
+	p.registerClient(clientObjA)
+
+	serverB, clientB := newTestConnPair(t)
+	clientObjB := NewClient(clientB, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+	clientObjB.Start(ctx)
+	p.registerClient(clientObjB)
+
+	existingRxTime := uint32(1700000000)
+	toRadioPayload := marshalToRadio(t, &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From:   0x12345678,
+				To:     0xFFFFFFFF,
+				Id:     88,
+				RxTime: existingRxTime,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum: pb.PortNum_TEXT_MESSAGE_APP,
+						Payload: []byte("keep my rxtime"),
+					},
+				},
+			},
+		},
+	})
+	p.echoToOtherClients(toRadioPayload, clientObjA)
+
+	got := readFrame(t, serverB, 2*time.Second)
+	fr := &pb.FromRadio{}
+	if err := proto.Unmarshal(got, fr); err != nil {
+		t.Fatalf("unmarshal echo: %v", err)
+	}
+	if fr.GetPacket().GetRxTime() != existingRxTime {
+		t.Errorf("RxTime = %d, want %d (should not be overwritten)", fr.GetPacket().GetRxTime(), existingRxTime)
+	}
+}

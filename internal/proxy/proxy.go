@@ -407,6 +407,14 @@ func (p *Proxy) echoToOtherClients(payload []byte, sender *Client) {
 		}
 	}
 
+	// Set RxTime if not already populated. The firmware normally sets this
+	// on received packets; for outgoing packets echoed to other clients the
+	// proxy fills it in so that iOS (which sorts messages by RxTime) shows
+	// them in chronological order.
+	if meshPkt.GetRxTime() == 0 {
+		meshPkt.RxTime = uint32(time.Now().Unix())
+	}
+
 	fromRadio := &pb.FromRadio{
 		PayloadVariant: &pb.FromRadio_Packet{
 			Packet: meshPkt,
@@ -471,6 +479,14 @@ func (p *Proxy) toRadioToFromRadio(payload []byte) []byte {
 		if nodeNum := p.nodeConn.MyNodeNum(); nodeNum != 0 {
 			meshPkt.From = nodeNum
 		}
+	}
+
+	// Set RxTime if not already populated. The firmware normally sets this
+	// on received packets; for outgoing packets converted to FromRadio for
+	// caching the proxy fills it in so that iOS (which sorts messages by
+	// RxTime) shows them in chronological order during chat replay.
+	if meshPkt.GetRxTime() == 0 {
+		meshPkt.RxTime = uint32(time.Now().Unix())
 	}
 
 	fromRadio := &pb.FromRadio{
