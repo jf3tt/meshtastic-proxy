@@ -12,6 +12,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/jfett/meshtastic-proxy/internal/metrics"
+	"github.com/jfett/meshtastic-proxy/internal/node"
 )
 
 // NodeConnection defines the interface for the node connection used by Proxy.
@@ -256,29 +257,70 @@ func (p *Proxy) closeAllClients() {
 }
 
 // broadcastLoop reads frames from the node and broadcasts them to all clients.
+//
+// Config frames (MyInfo, Config, ModuleConfig, Channel, NodeInfo, Metadata,
+// ConfigCompleteId, DeviceuiConfig, FileInfo) are NOT broadcast. Clients
+// receive their config exclusively via replayCachedConfig when they send
+// want_config_id. Broadcasting config frames would corrupt the iOS app's
+// state machine — especially during node reconnects, where 170+ config
+// frames (including ConfigCompleteId with the proxy's own nonce) would be
+// delivered to already-connected clients that never requested them.
 func (p *Proxy) broadcastLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case payload := <-p.nodeConn.FromNode():
-			// Log config-related frames for debugging multi-client issues
-			msg := &pb.FromRadio{}
-			if err := proto.Unmarshal(payload, msg); err == nil {
-				switch v := msg.GetPayloadVariant().(type) {
-				case *pb.FromRadio_MyInfo:
-					p.logger.Debug("broadcasting my_info from node",
-						"node_num", v.MyInfo.GetMyNodeNum(),
-					)
-				case *pb.FromRadio_ConfigCompleteId:
-					p.logger.Debug("broadcasting config_complete_id from node",
-						"nonce", v.ConfigCompleteId,
-					)
-				}
+			if isConfigFrame(payload) {
+				p.logger.Debug("suppressing config frame from broadcast",
+					"type", classifyFromRadio(payload),
+				)
+				continue
 			}
 			p.broadcast(payload)
 		}
 	}
+}
+
+// isConfigFrame returns true if the payload is a FromRadio config frame
+// that should NOT be broadcast to clients. Config frames are delivered
+// exclusively through replayCachedConfig.
+//
+// Config frame types: MyInfo, NodeInfo, Config, ModuleConfig, Channel,
+// ConfigCompleteId, Metadata, DeviceuiConfig, FileInfo.
+//
+// Runtime frame types (broadcast normally): Packet, QueueStatus, LogRecord,
+// Rebooted, MqttClientProxyMessage, XModem, FileInfo (also kept as runtime
+// to be safe), and any unknown/unparseable frames.
+func isConfigFrame(payload []byte) bool {
+	msg := &pb.FromRadio{}
+	if err := proto.Unmarshal(payload, msg); err != nil {
+		return false // unparseable → treat as runtime, broadcast it
+	}
+
+	switch msg.GetPayloadVariant().(type) {
+	case *pb.FromRadio_MyInfo,
+		*pb.FromRadio_NodeInfo,
+		*pb.FromRadio_Config,
+		*pb.FromRadio_ModuleConfig,
+		*pb.FromRadio_Channel,
+		*pb.FromRadio_ConfigCompleteId,
+		*pb.FromRadio_Metadata,
+		*pb.FromRadio_DeviceuiConfig:
+		return true
+	default:
+		return false
+	}
+}
+
+// classifyFromRadio returns a short type name for a FromRadio payload.
+// Used for debug logging only.
+func classifyFromRadio(payload []byte) string {
+	msg := &pb.FromRadio{}
+	if err := proto.Unmarshal(payload, msg); err != nil {
+		return "unparseable"
+	}
+	return node.FromRadioTypeName(msg)
 }
 
 func (p *Proxy) broadcast(payload []byte) {

@@ -1735,3 +1735,199 @@ func TestFromRadioTypeName(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// isConfigFrame tests
+// ---------------------------------------------------------------------------
+
+func TestIsConfigFrame_ConfigTypes(t *testing.T) {
+	// All config frame types must return true.
+	configFrames := []*pb.FromRadio{
+		{PayloadVariant: &pb.FromRadio_MyInfo{MyInfo: &pb.MyNodeInfo{MyNodeNum: 1}}},
+		{PayloadVariant: &pb.FromRadio_NodeInfo{NodeInfo: &pb.NodeInfo{Num: 1}}},
+		{PayloadVariant: &pb.FromRadio_Config{Config: &pb.Config{
+			PayloadVariant: &pb.Config_Device{Device: &pb.Config_DeviceConfig{}},
+		}}},
+		{PayloadVariant: &pb.FromRadio_ModuleConfig{ModuleConfig: &pb.ModuleConfig{
+			PayloadVariant: &pb.ModuleConfig_Mqtt{Mqtt: &pb.ModuleConfig_MQTTConfig{}},
+		}}},
+		{PayloadVariant: &pb.FromRadio_Channel{Channel: &pb.Channel{Index: 0}}},
+		{PayloadVariant: &pb.FromRadio_ConfigCompleteId{ConfigCompleteId: 99999}},
+		{PayloadVariant: &pb.FromRadio_Metadata{Metadata: &pb.DeviceMetadata{FirmwareVersion: "2.5.0"}}},
+		{PayloadVariant: &pb.FromRadio_DeviceuiConfig{}},
+	}
+
+	for _, msg := range configFrames {
+		payload := marshalFromRadio(t, msg)
+		typeName := node.FromRadioTypeName(msg)
+		if !isConfigFrame(payload) {
+			t.Errorf("isConfigFrame(%s) = false, want true", typeName)
+		}
+	}
+}
+
+func TestIsConfigFrame_RuntimeTypes(t *testing.T) {
+	// All runtime frame types must return false.
+	runtimeFrames := []*pb.FromRadio{
+		{PayloadVariant: &pb.FromRadio_Packet{Packet: &pb.MeshPacket{
+			From: 0x12345678, To: 0xFFFFFFFF,
+		}}},
+		{PayloadVariant: &pb.FromRadio_QueueStatus{QueueStatus: &pb.QueueStatus{Free: 10}}},
+		{PayloadVariant: &pb.FromRadio_LogRecord{LogRecord: &pb.LogRecord{Message: "test"}}},
+		{PayloadVariant: &pb.FromRadio_Rebooted{Rebooted: true}},
+	}
+
+	for _, msg := range runtimeFrames {
+		payload := marshalFromRadio(t, msg)
+		typeName := node.FromRadioTypeName(msg)
+		if isConfigFrame(payload) {
+			t.Errorf("isConfigFrame(%s) = true, want false", typeName)
+		}
+	}
+}
+
+func TestIsConfigFrame_InvalidPayload(t *testing.T) {
+	// Invalid protobuf should return false (broadcast, not suppress).
+	if isConfigFrame([]byte{0xFF, 0xFF, 0xFF}) {
+		t.Error("isConfigFrame(invalid) = true, want false")
+	}
+}
+
+func TestIsConfigFrame_EmptyFromRadio(t *testing.T) {
+	// FromRadio with no payload variant set should return false.
+	payload := marshalFromRadio(t, &pb.FromRadio{})
+	if isConfigFrame(payload) {
+		t.Error("isConfigFrame(empty) = true, want false")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// broadcastLoop config filtering tests
+// ---------------------------------------------------------------------------
+
+func TestBroadcastLoop_FiltersConfigFrames(t *testing.T) {
+	// Verify that broadcastLoop does NOT broadcast config frames to clients,
+	// but DOES broadcast runtime frames (MeshPacket, QueueStatus).
+	mockNode := newMockNodeConn(nil)
+	m := metrics.New(10, 300)
+	p := New(Options{ListenAddr: ":0", MaxClients: 10, ClientSendBuffer: 256, IOSNodeInfoDelay: 50 * time.Millisecond, NodeConn: mockNode, Metrics: m, Logger: slog.Default()})
+
+	serverConn, clientConn := newTestConnPair(t)
+	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client.Start(ctx)
+	p.registerClient(client)
+
+	go p.broadcastLoop(ctx)
+
+	// Send a config frame (MyInfo) — should be suppressed.
+	configPayload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_MyInfo{
+			MyInfo: &pb.MyNodeInfo{MyNodeNum: 0x12345678},
+		},
+	})
+	mockNode.fromNode <- configPayload
+
+	// Send a config frame (ConfigCompleteId) — should be suppressed.
+	completePayload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_ConfigCompleteId{
+			ConfigCompleteId: 99999,
+		},
+	})
+	mockNode.fromNode <- completePayload
+
+	// Send a runtime frame (MeshPacket) — should be broadcast.
+	runtimePayload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From: 0xDEADBEEF,
+				To:   0xFFFFFFFF,
+				Id:   42,
+			},
+		},
+	})
+	mockNode.fromNode <- runtimePayload
+
+	// The client should receive ONLY the MeshPacket, not the config frames.
+	got := readFrame(t, serverConn, 2*time.Second)
+	msg := &pb.FromRadio{}
+	if err := proto.Unmarshal(got, msg); err != nil {
+		t.Fatalf("unmarshal received frame: %v", err)
+	}
+	pkt, ok := msg.GetPayloadVariant().(*pb.FromRadio_Packet)
+	if !ok {
+		t.Fatalf("expected Packet variant, got %T", msg.GetPayloadVariant())
+	}
+	if pkt.Packet.GetFrom() != 0xDEADBEEF {
+		t.Errorf("From = %08x, want DEADBEEF", pkt.Packet.GetFrom())
+	}
+	if pkt.Packet.GetId() != 42 {
+		t.Errorf("Id = %d, want 42", pkt.Packet.GetId())
+	}
+
+	// No more frames should be available (config frames were suppressed).
+	_ = serverConn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	_, err := protocol.ReadFrame(serverConn)
+	if err == nil {
+		t.Error("received unexpected frame — config frames should have been filtered")
+	}
+}
+
+func TestBroadcastLoop_AllConfigTypesSuppressed(t *testing.T) {
+	// Verify that ALL config frame types are suppressed by broadcastLoop,
+	// while a runtime frame sent afterwards is delivered.
+	mockNode := newMockNodeConn(nil)
+	m := metrics.New(10, 300)
+	p := New(Options{ListenAddr: ":0", MaxClients: 10, ClientSendBuffer: 256, IOSNodeInfoDelay: 50 * time.Millisecond, NodeConn: mockNode, Metrics: m, Logger: slog.Default()})
+
+	serverConn, clientConn := newTestConnPair(t)
+	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client.Start(ctx)
+	p.registerClient(client)
+
+	go p.broadcastLoop(ctx)
+
+	// Send all config frame types — all should be suppressed.
+	configFrames := []*pb.FromRadio{
+		{PayloadVariant: &pb.FromRadio_MyInfo{MyInfo: &pb.MyNodeInfo{MyNodeNum: 1}}},
+		{PayloadVariant: &pb.FromRadio_NodeInfo{NodeInfo: &pb.NodeInfo{Num: 1}}},
+		{PayloadVariant: &pb.FromRadio_Config{Config: &pb.Config{
+			PayloadVariant: &pb.Config_Device{Device: &pb.Config_DeviceConfig{}},
+		}}},
+		{PayloadVariant: &pb.FromRadio_ModuleConfig{ModuleConfig: &pb.ModuleConfig{
+			PayloadVariant: &pb.ModuleConfig_Mqtt{Mqtt: &pb.ModuleConfig_MQTTConfig{}},
+		}}},
+		{PayloadVariant: &pb.FromRadio_Channel{Channel: &pb.Channel{Index: 0}}},
+		{PayloadVariant: &pb.FromRadio_Metadata{Metadata: &pb.DeviceMetadata{}}},
+		{PayloadVariant: &pb.FromRadio_ConfigCompleteId{ConfigCompleteId: 99999}},
+		{PayloadVariant: &pb.FromRadio_DeviceuiConfig{}},
+	}
+	for _, msg := range configFrames {
+		mockNode.fromNode <- marshalFromRadio(t, msg)
+	}
+
+	// Send a sentinel runtime frame so we know all config frames have been processed.
+	sentinel := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_QueueStatus{
+			QueueStatus: &pb.QueueStatus{Free: 77},
+		},
+	})
+	mockNode.fromNode <- sentinel
+
+	// The only frame the client should receive is the sentinel QueueStatus.
+	got := readFrame(t, serverConn, 2*time.Second)
+	msg2 := &pb.FromRadio{}
+	if err := proto.Unmarshal(got, msg2); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	qs, ok := msg2.GetPayloadVariant().(*pb.FromRadio_QueueStatus)
+	if !ok {
+		t.Fatalf("expected QueueStatus (sentinel), got %T", msg2.GetPayloadVariant())
+	}
+	if qs.QueueStatus.GetFree() != 77 {
+		t.Errorf("sentinel Free = %d, want 77", qs.QueueStatus.GetFree())
+	}
+}
