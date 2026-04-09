@@ -33,10 +33,10 @@ func formatChatMessage(msg metrics.ChatMessage, nodeDir map[uint32]metrics.NodeE
 	if senderName == "" {
 		senderName = fmt.Sprintf("!%08x", msg.From)
 	}
-	b.WriteString(fmt.Sprintf("<b>%s</b>", html.EscapeString(senderName)))
+	fmt.Fprintf(&b, "<b>%s</b>", html.EscapeString(senderName))
 
 	// Direction arrow and channel
-	b.WriteString(fmt.Sprintf(" → <i>%s</i>\n", html.EscapeString(channelName(msg.Channel))))
+	fmt.Fprintf(&b, " → <i>%s</i>\n", html.EscapeString(channelName(msg.Channel)))
 
 	// Message text
 	b.WriteString(html.EscapeString(msg.Text))

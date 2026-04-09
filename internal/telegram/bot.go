@@ -41,7 +41,9 @@ func New(cfg config.TelegramConfig, m *metrics.Metrics, logger *slog.Logger) *Bo
 		channels[0] = true
 	} else {
 		for _, ch := range cfg.Channels {
-			channels[uint32(ch)] = true
+			if ch >= 0 && ch <= 7 {
+				channels[uint32(ch)] = true
+			}
 		}
 	}
 
@@ -83,7 +85,7 @@ type sendMessageResponse struct {
 }
 
 // Run starts the bot event loop. It validates the token, then subscribes to
-// chat message events and forwards them to Telegram. Blocks until ctx is cancelled.
+// chat message events and forwards them to Telegram. Blocks until ctx is canceled.
 func (b *Bot) Run(ctx context.Context) error {
 	// Validate token by calling getMe
 	user, err := b.getMe(ctx)
@@ -166,7 +168,7 @@ func (b *Bot) getMe(ctx context.Context) (*botUser, error) {
 	if err != nil {
 		return nil, fmt.Errorf("calling getMe: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -210,7 +212,7 @@ func (b *Bot) sendMessage(ctx context.Context, text string) error {
 	if err != nil {
 		return fmt.Errorf("calling sendMessage: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
