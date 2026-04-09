@@ -32,6 +32,7 @@ type Proxy struct {
 	clientSendBuffer  int
 	clientIdleTimeout time.Duration
 	iosNodeInfoDelay  time.Duration
+	maxChatCache      int
 	nodeConn          NodeConnection
 	metrics           *metrics.Metrics
 	logger            *slog.Logger
@@ -39,6 +40,10 @@ type Proxy struct {
 	mu      sync.RWMutex
 	clients map[*Client]struct{}
 	wg      sync.WaitGroup // tracks client goroutines for graceful shutdown
+
+	// chatMu protects chatCache.
+	chatMu    sync.RWMutex
+	chatCache [][]byte // ring buffer of cached FromRadio text message payloads
 }
 
 // Options holds all configuration for creating a new Proxy.
@@ -48,6 +53,7 @@ type Options struct {
 	ClientSendBuffer  int
 	ClientIdleTimeout time.Duration
 	IOSNodeInfoDelay  time.Duration
+	MaxChatCache      int
 	NodeConn          NodeConnection
 	Metrics           *metrics.Metrics
 	Logger            *slog.Logger
@@ -61,6 +67,7 @@ func New(opts Options) *Proxy {
 		clientSendBuffer:  opts.ClientSendBuffer,
 		clientIdleTimeout: opts.ClientIdleTimeout,
 		iosNodeInfoDelay:  opts.IOSNodeInfoDelay,
+		maxChatCache:      opts.MaxChatCache,
 		nodeConn:          opts.NodeConn,
 		metrics:           opts.Metrics,
 		logger:            opts.Logger,
@@ -177,6 +184,12 @@ func (p *Proxy) handleNewConnection(ctx context.Context, conn net.Conn) {
 			// Echo MeshPackets to other connected clients so they see
 			// messages sent by their peers through the shared node.
 			p.echoToOtherClients(payload, client)
+			// Cache outgoing text messages for replay to new/reconnecting clients.
+			if fromRadioPayload := p.toRadioToFromRadio(payload); fromRadioPayload != nil {
+				if isTextMessageFrame(fromRadioPayload) {
+					p.cacheTextMessage(fromRadioPayload)
+				}
+			}
 			p.nodeConn.Send(payload)
 		},
 		func(c *Client) {
@@ -276,6 +289,10 @@ func (p *Proxy) broadcastLoop(ctx context.Context) {
 					"type", classifyFromRadio(payload),
 				)
 				continue
+			}
+			// Cache incoming text messages for replay to new/reconnecting clients.
+			if isTextMessageFrame(payload) {
+				p.cacheTextMessage(payload)
 			}
 			p.broadcast(payload)
 		}
@@ -398,4 +415,106 @@ func (p *Proxy) echoToOtherClients(payload []byte, sender *Client) {
 func decodeToRadioType(payload []byte) (*pb.ToRadio, error) {
 	msg := &pb.ToRadio{}
 	return msg, proto.Unmarshal(payload, msg)
+}
+
+// isTextMessageFrame returns true if the FromRadio payload contains a decoded
+// MeshPacket with PortNum_TEXT_MESSAGE_APP. Used to identify chat messages
+// for caching.
+func isTextMessageFrame(payload []byte) bool {
+	msg := &pb.FromRadio{}
+	if err := proto.Unmarshal(payload, msg); err != nil {
+		return false
+	}
+	pkt, ok := msg.GetPayloadVariant().(*pb.FromRadio_Packet)
+	if !ok || pkt.Packet == nil {
+		return false
+	}
+	decoded, ok := pkt.Packet.GetPayloadVariant().(*pb.MeshPacket_Decoded)
+	if !ok || decoded.Decoded == nil {
+		return false
+	}
+	return decoded.Decoded.GetPortnum() == pb.PortNum_TEXT_MESSAGE_APP
+}
+
+// toRadioToFromRadio converts a ToRadio MeshPacket payload into a FromRadio
+// payload suitable for caching. If the MeshPacket has From == 0, the node's
+// own number is substituted. Returns nil if the payload is not a ToRadio
+// MeshPacket or cannot be converted.
+func (p *Proxy) toRadioToFromRadio(payload []byte) []byte {
+	msg := &pb.ToRadio{}
+	if err := proto.Unmarshal(payload, msg); err != nil {
+		return nil
+	}
+
+	pkt, ok := msg.GetPayloadVariant().(*pb.ToRadio_Packet)
+	if !ok || pkt.Packet == nil {
+		return nil
+	}
+
+	meshPkt, ok := proto.Clone(pkt.Packet).(*pb.MeshPacket)
+	if !ok {
+		return nil
+	}
+
+	if meshPkt.GetFrom() == 0 {
+		if nodeNum := p.nodeConn.MyNodeNum(); nodeNum != 0 {
+			meshPkt.From = nodeNum
+		}
+	}
+
+	fromRadio := &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: meshPkt,
+		},
+	}
+
+	data, err := proto.Marshal(fromRadio)
+	if err != nil {
+		return nil
+	}
+	return data
+}
+
+// cacheTextMessage appends a FromRadio text message payload to the chat cache.
+// If the cache exceeds maxChatCache, the oldest entries are dropped.
+// Does nothing if maxChatCache is 0 (disabled).
+func (p *Proxy) cacheTextMessage(payload []byte) {
+	if p.maxChatCache <= 0 {
+		return
+	}
+
+	// Make a copy so we don't retain references to the original buffer.
+	cp := make([]byte, len(payload))
+	copy(cp, payload)
+
+	p.chatMu.Lock()
+	p.chatCache = append(p.chatCache, cp)
+	if len(p.chatCache) > p.maxChatCache {
+		// Drop oldest entries beyond the limit.
+		excess := len(p.chatCache) - p.maxChatCache
+		// Zero out dropped slice elements to allow GC.
+		for i := 0; i < excess; i++ {
+			p.chatCache[i] = nil
+		}
+		p.chatCache = p.chatCache[excess:]
+	}
+	p.chatMu.Unlock()
+}
+
+// chatCacheSnapshot returns a copy of the current chat cache.
+func (p *Proxy) chatCacheSnapshot() [][]byte {
+	p.chatMu.RLock()
+	defer p.chatMu.RUnlock()
+
+	if len(p.chatCache) == 0 {
+		return nil
+	}
+
+	result := make([][]byte, len(p.chatCache))
+	for i, frame := range p.chatCache {
+		cp := make([]byte, len(frame))
+		copy(cp, frame)
+		result[i] = cp
+	}
+	return result
 }

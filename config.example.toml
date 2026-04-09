@@ -49,6 +49,11 @@ client_idle_timeout = "30m"
 # Workaround for iOS CoreData timing issue. Set to 0 to disable.
 ios_nodeinfo_delay = "50ms"
 
+# Maximum number of text messages (TEXT_MESSAGE_APP) to cache for replay
+# to new/reconnecting clients. Both incoming (from mesh) and outgoing
+# (sent by clients through proxy) messages are cached. Set to 0 to disable.
+max_chat_cache = 1000
+
 [web]
 # Address to listen for the web dashboard
 listen = ":8080"

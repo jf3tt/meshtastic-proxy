@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"sync"
@@ -1929,5 +1930,650 @@ func TestBroadcastLoop_AllConfigTypesSuppressed(t *testing.T) {
 	}
 	if qs.QueueStatus.GetFree() != 77 {
 		t.Errorf("sentinel Free = %d, want 77", qs.QueueStatus.GetFree())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Chat cache test helpers
+// ---------------------------------------------------------------------------
+
+// buildTextMessagePayload creates a FromRadio protobuf payload containing a
+// decoded MeshPacket with TEXT_MESSAGE_APP and the given text.
+func buildTextMessagePayload(t *testing.T, from, to uint32, text string) []byte {
+	t.Helper()
+	return marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From: from,
+				To:   to,
+				Id:   uint32(len(text)), // unique enough for tests
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum: pb.PortNum_TEXT_MESSAGE_APP,
+						Payload: []byte(text),
+					},
+				},
+			},
+		},
+	})
+}
+
+// buildToRadioTextMessage creates a ToRadio protobuf payload containing a
+// MeshPacket with TEXT_MESSAGE_APP.
+func buildToRadioTextMessage(t *testing.T, from, to uint32, text string) []byte {
+	t.Helper()
+	return marshalToRadio(t, &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From: from,
+				To:   to,
+				Id:   uint32(len(text)),
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum: pb.PortNum_TEXT_MESSAGE_APP,
+						Payload: []byte(text),
+					},
+				},
+			},
+		},
+	})
+}
+
+// buildPositionPayload creates a FromRadio protobuf payload containing a
+// decoded MeshPacket with POSITION_APP (non-text).
+func buildPositionPayload(t *testing.T, from uint32) []byte {
+	t.Helper()
+	return marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From: from,
+				To:   0xFFFFFFFF,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum: pb.PortNum_POSITION_APP,
+						Payload: []byte{0x01, 0x02},
+					},
+				},
+			},
+		},
+	})
+}
+
+// newTestProxy creates a Proxy with a mockNodeConn and the given maxChatCache.
+func newTestProxy(t *testing.T, cache [][]byte, maxChatCache int) (*Proxy, *mockNodeConn) {
+	t.Helper()
+	mockNode := newMockNodeConn(cache)
+	mockNode.myNodeNum = 0x12345678
+	m := metrics.New(10, 300)
+	p := New(Options{
+		ListenAddr:       ":0",
+		MaxClients:       10,
+		ClientSendBuffer: 256,
+		IOSNodeInfoDelay: 0, // no delay for tests
+		MaxChatCache:     maxChatCache,
+		NodeConn:         mockNode,
+		Metrics:          m,
+		Logger:           slog.Default(),
+	})
+	return p, mockNode
+}
+
+// ---------------------------------------------------------------------------
+// isTextMessageFrame tests
+// ---------------------------------------------------------------------------
+
+func TestIsTextMessageFrame_TextMessage(t *testing.T) {
+	payload := buildTextMessagePayload(t, 0x12345678, 0xFFFFFFFF, "hello")
+	if !isTextMessageFrame(payload) {
+		t.Error("isTextMessageFrame returned false for TEXT_MESSAGE_APP")
+	}
+}
+
+func TestIsTextMessageFrame_PositionMessage(t *testing.T) {
+	payload := buildPositionPayload(t, 0x12345678)
+	if isTextMessageFrame(payload) {
+		t.Error("isTextMessageFrame returned true for POSITION_APP")
+	}
+}
+
+func TestIsTextMessageFrame_ConfigFrame(t *testing.T) {
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_MyInfo{MyInfo: &pb.MyNodeInfo{MyNodeNum: 1}},
+	})
+	if isTextMessageFrame(payload) {
+		t.Error("isTextMessageFrame returned true for MyInfo config frame")
+	}
+}
+
+func TestIsTextMessageFrame_InvalidPayload(t *testing.T) {
+	if isTextMessageFrame([]byte{0xFF, 0xFF}) {
+		t.Error("isTextMessageFrame returned true for invalid payload")
+	}
+}
+
+func TestIsTextMessageFrame_EncryptedPacket(t *testing.T) {
+	// Encrypted packets have MeshPacket_Encrypted, not MeshPacket_Decoded.
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From: 0x12345678,
+				To:   0xFFFFFFFF,
+				PayloadVariant: &pb.MeshPacket_Encrypted{
+					Encrypted: []byte{0x01, 0x02, 0x03},
+				},
+			},
+		},
+	})
+	if isTextMessageFrame(payload) {
+		t.Error("isTextMessageFrame returned true for encrypted packet")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// cacheTextMessage tests
+// ---------------------------------------------------------------------------
+
+func TestCacheTextMessage_IncomingMessages(t *testing.T) {
+	p, _ := newTestProxy(t, nil, 100)
+
+	msg1 := buildTextMessagePayload(t, 0xAAAAAAAA, 0xFFFFFFFF, "hello")
+	msg2 := buildTextMessagePayload(t, 0xBBBBBBBB, 0xFFFFFFFF, "world")
+
+	p.cacheTextMessage(msg1)
+	p.cacheTextMessage(msg2)
+
+	snapshot := p.chatCacheSnapshot()
+	if len(snapshot) != 2 {
+		t.Fatalf("cache size = %d, want 2", len(snapshot))
+	}
+}
+
+func TestCacheTextMessage_RingBufferEviction(t *testing.T) {
+	p, _ := newTestProxy(t, nil, 5) // max 5 messages
+
+	// Add 7 messages — oldest 2 should be evicted.
+	for i := 0; i < 7; i++ {
+		msg := buildTextMessagePayload(t, 0x12345678, 0xFFFFFFFF, fmt.Sprintf("msg%d", i))
+		p.cacheTextMessage(msg)
+	}
+
+	snapshot := p.chatCacheSnapshot()
+	if len(snapshot) != 5 {
+		t.Fatalf("cache size = %d, want 5 (max)", len(snapshot))
+	}
+
+	// Verify oldest messages were evicted: first cached message should be "msg2".
+	fr := &pb.FromRadio{}
+	if err := proto.Unmarshal(snapshot[0], fr); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	pkt := fr.GetPacket()
+	decoded := pkt.GetDecoded()
+	if string(decoded.GetPayload()) != "msg2" {
+		t.Errorf("oldest message = %q, want %q", decoded.GetPayload(), "msg2")
+	}
+}
+
+func TestCacheTextMessage_DisabledWhenZero(t *testing.T) {
+	p, _ := newTestProxy(t, nil, 0) // disabled
+
+	msg := buildTextMessagePayload(t, 0x12345678, 0xFFFFFFFF, "should not cache")
+	p.cacheTextMessage(msg)
+
+	snapshot := p.chatCacheSnapshot()
+	if len(snapshot) != 0 {
+		t.Fatalf("cache size = %d, want 0 (disabled)", len(snapshot))
+	}
+}
+
+func TestCacheTextMessage_SnapshotIsCopy(t *testing.T) {
+	p, _ := newTestProxy(t, nil, 100)
+
+	msg := buildTextMessagePayload(t, 0x12345678, 0xFFFFFFFF, "test")
+	p.cacheTextMessage(msg)
+
+	snapshot1 := p.chatCacheSnapshot()
+	// Mutate the snapshot.
+	snapshot1[0][0] = 0xFF
+
+	// Original cache should not be affected.
+	snapshot2 := p.chatCacheSnapshot()
+	if snapshot2[0][0] == 0xFF {
+		t.Error("chatCacheSnapshot returned a reference, not a copy")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// toRadioToFromRadio tests
+// ---------------------------------------------------------------------------
+
+func TestToRadioToFromRadio_TextMessage(t *testing.T) {
+	p, _ := newTestProxy(t, nil, 100)
+
+	toRadioPayload := buildToRadioTextMessage(t, 0, 0xFFFFFFFF, "hello from client")
+	fromRadioPayload := p.toRadioToFromRadio(toRadioPayload)
+	if fromRadioPayload == nil {
+		t.Fatal("toRadioToFromRadio returned nil for text message")
+	}
+
+	// Should be a valid FromRadio with text message.
+	if !isTextMessageFrame(fromRadioPayload) {
+		t.Error("converted payload is not a text message frame")
+	}
+
+	// From should be filled with myNodeNum (0x12345678).
+	fr := &pb.FromRadio{}
+	if err := proto.Unmarshal(fromRadioPayload, fr); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	pkt := fr.GetPacket()
+	if pkt.GetFrom() != 0x12345678 {
+		t.Errorf("From = %08x, want 12345678", pkt.GetFrom())
+	}
+}
+
+func TestToRadioToFromRadio_NonPacket(t *testing.T) {
+	p, _ := newTestProxy(t, nil, 100)
+
+	heartbeat := marshalToRadio(t, &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Heartbeat{Heartbeat: &pb.Heartbeat{}},
+	})
+
+	result := p.toRadioToFromRadio(heartbeat)
+	if result != nil {
+		t.Error("toRadioToFromRadio should return nil for non-packet")
+	}
+}
+
+func TestToRadioToFromRadio_InvalidPayload(t *testing.T) {
+	p, _ := newTestProxy(t, nil, 100)
+
+	result := p.toRadioToFromRadio([]byte{0xFF, 0xFF})
+	if result != nil {
+		t.Error("toRadioToFromRadio should return nil for invalid payload")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Chat cache integration in broadcastLoop
+// ---------------------------------------------------------------------------
+
+func TestBroadcastLoop_CachesTextMessages(t *testing.T) {
+	p, mockNode := newTestProxy(t, nil, 100)
+
+	serverConn, clientConn := newTestConnPair(t)
+	m := metrics.New(10, 300)
+	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client.Start(ctx)
+	p.registerClient(client)
+
+	go p.broadcastLoop(ctx)
+
+	// Send a text message from the node.
+	textPayload := buildTextMessagePayload(t, 0xAAAAAAAA, 0xFFFFFFFF, "cached msg")
+	mockNode.fromNode <- textPayload
+
+	// Wait for the client to receive it (proves broadcastLoop processed it).
+	readFrame(t, serverConn, 2*time.Second)
+
+	// Verify it was cached.
+	snapshot := p.chatCacheSnapshot()
+	if len(snapshot) != 1 {
+		t.Fatalf("chat cache size = %d, want 1", len(snapshot))
+	}
+}
+
+func TestBroadcastLoop_DoesNotCacheNonText(t *testing.T) {
+	p, mockNode := newTestProxy(t, nil, 100)
+
+	serverConn, clientConn := newTestConnPair(t)
+	m := metrics.New(10, 300)
+	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client.Start(ctx)
+	p.registerClient(client)
+
+	go p.broadcastLoop(ctx)
+
+	// Send a position message from the node.
+	posPayload := buildPositionPayload(t, 0xAAAAAAAA)
+	mockNode.fromNode <- posPayload
+
+	// Wait for the client to receive it.
+	readFrame(t, serverConn, 2*time.Second)
+
+	// Verify it was NOT cached.
+	snapshot := p.chatCacheSnapshot()
+	if len(snapshot) != 0 {
+		t.Fatalf("chat cache size = %d, want 0 (position should not be cached)", len(snapshot))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// shouldReplayChat tests
+// ---------------------------------------------------------------------------
+
+func TestShouldReplayChat_RandomNonce(t *testing.T) {
+	p, _ := newTestProxy(t, nil, 100)
+	m := metrics.New(10, 300)
+	_, clientConn := newTestConnPair(t)
+	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+
+	if !p.shouldReplayChat(12345, client) {
+		t.Error("shouldReplayChat should return true for random nonce")
+	}
+}
+
+func TestShouldReplayChat_ConfigOnlyNonce(t *testing.T) {
+	p, _ := newTestProxy(t, nil, 100)
+	m := metrics.New(10, 300)
+	_, clientConn := newTestConnPair(t)
+	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+
+	if p.shouldReplayChat(nonceOnlyConfig, client) {
+		t.Error("shouldReplayChat should return false for config-only nonce (first phase)")
+	}
+}
+
+func TestShouldReplayChat_NodesOnlyNonceAfterConfig(t *testing.T) {
+	p, _ := newTestProxy(t, nil, 100)
+	m := metrics.New(10, 300)
+	_, clientConn := newTestConnPair(t)
+	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+
+	// Simulate iOS: config phase was already seen.
+	client.configPhase.Or(configPhaseConfig)
+
+	if !p.shouldReplayChat(nonceOnlyNodes, client) {
+		t.Error("shouldReplayChat should return true for nodes-only nonce after config phase")
+	}
+}
+
+func TestShouldReplayChat_NodesOnlyNonceWithoutConfig(t *testing.T) {
+	p, _ := newTestProxy(t, nil, 100)
+	m := metrics.New(10, 300)
+	_, clientConn := newTestConnPair(t)
+	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+
+	// Nodes-only without prior config phase — shouldn't happen normally,
+	// but handle it defensively.
+	if p.shouldReplayChat(nonceOnlyNodes, client) {
+		t.Error("shouldReplayChat should return false for nodes-only nonce without config phase")
+	}
+}
+
+func TestShouldReplayChat_Disabled(t *testing.T) {
+	p, _ := newTestProxy(t, nil, 0) // disabled
+	m := metrics.New(10, 300)
+	_, clientConn := newTestConnPair(t)
+	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+
+	if p.shouldReplayChat(12345, client) {
+		t.Error("shouldReplayChat should return false when maxChatCache=0")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// replayChatHistory tests
+// ---------------------------------------------------------------------------
+
+func TestReplayChatHistory_DeliversMessages(t *testing.T) {
+	p, _ := newTestProxy(t, nil, 100)
+
+	// Pre-populate the chat cache.
+	for i := 0; i < 3; i++ {
+		msg := buildTextMessagePayload(t, 0xAAAAAAAA, 0xFFFFFFFF, fmt.Sprintf("chat%d", i))
+		p.cacheTextMessage(msg)
+	}
+
+	serverConn, clientConn := newTestConnPair(t)
+	m := metrics.New(10, 300)
+	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client.Start(ctx)
+
+	p.replayChatHistory(client)
+
+	// Read 3 chat messages.
+	for i := 0; i < 3; i++ {
+		got := readFrame(t, serverConn, 2*time.Second)
+		fr := &pb.FromRadio{}
+		if err := proto.Unmarshal(got, fr); err != nil {
+			t.Fatalf("msg %d: unmarshal: %v", i, err)
+		}
+		pkt := fr.GetPacket()
+		if pkt == nil {
+			t.Fatalf("msg %d: no packet", i)
+		}
+		decoded := pkt.GetDecoded()
+		if decoded == nil {
+			t.Fatalf("msg %d: no decoded data", i)
+		}
+		want := fmt.Sprintf("chat%d", i)
+		if string(decoded.GetPayload()) != want {
+			t.Errorf("msg %d: text = %q, want %q", i, decoded.GetPayload(), want)
+		}
+	}
+}
+
+func TestReplayChatHistory_EmptyCache(t *testing.T) {
+	p, _ := newTestProxy(t, nil, 100)
+
+	serverConn, clientConn := newTestConnPair(t)
+	m := metrics.New(10, 300)
+	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client.Start(ctx)
+
+	p.replayChatHistory(client)
+
+	// Should receive no frames.
+	_ = serverConn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	_, err := protocol.ReadFrame(serverConn)
+	if err == nil {
+		t.Error("expected no frames from empty chat cache")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// End-to-end chat replay integration tests
+// ---------------------------------------------------------------------------
+
+func TestChatReplay_AfterRandomNonce(t *testing.T) {
+	// Python CLI scenario: single want_config_id with random nonce.
+	// Chat history should be replayed immediately after config replay.
+	myNum := uint32(0x12345678)
+	cache := buildTestCache(t, myNum, nil) // simple cache
+	p, _ := newTestProxy(t, cache, 100)
+
+	// Pre-populate chat cache.
+	chatMsg := buildTextMessagePayload(t, 0xAAAAAAAA, 0xFFFFFFFF, "cached chat")
+	p.cacheTextMessage(chatMsg)
+
+	serverConn, clientConn := newTestConnPair(t)
+	m := metrics.New(10, 300)
+	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client.Start(ctx)
+
+	// Random nonce → full config + chat replay.
+	p.replayCachedConfig(client, 12345)
+
+	// Read all frames: config frames + chat message.
+	var frames [][]byte
+	for {
+		_ = serverConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		payload, err := protocol.ReadFrame(serverConn)
+		if err != nil {
+			break
+		}
+		frames = append(frames, payload)
+	}
+
+	// Should have: config frames (len(cache)) + 1 chat message.
+	expectedConfig := len(cache) // all frames in cache
+	expectedTotal := expectedConfig + 1
+	if len(frames) != expectedTotal {
+		t.Fatalf("got %d frames, want %d (config %d + chat 1)", len(frames), expectedTotal, expectedConfig)
+	}
+
+	// Last frame should be the chat message.
+	lastFrame := frames[len(frames)-1]
+	if !isTextMessageFrame(lastFrame) {
+		t.Error("last frame is not a text message")
+	}
+}
+
+func TestChatReplay_AfterIOSNodesPhase(t *testing.T) {
+	// iOS scenario: first want_config_id with 69420, then 69421.
+	// Chat should be replayed only after the second (69421) phase.
+	myNum := uint32(0x12345678)
+	cache := buildTestCache(t, myNum, []uint32{0xBBBBBBBB})
+	p, _ := newTestProxy(t, cache, 100)
+
+	// Pre-populate chat cache.
+	chatMsg := buildTextMessagePayload(t, 0xAAAAAAAA, 0xFFFFFFFF, "ios cached chat")
+	p.cacheTextMessage(chatMsg)
+
+	serverConn, clientConn := newTestConnPair(t)
+	m := metrics.New(10, 300)
+	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client.Start(ctx)
+
+	// Phase 1: config-only (69420) — should NOT include chat.
+	p.replayCachedConfig(client, nonceOnlyConfig)
+
+	var phase1Frames [][]byte
+	for {
+		_ = serverConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		payload, err := protocol.ReadFrame(serverConn)
+		if err != nil {
+			break
+		}
+		phase1Frames = append(phase1Frames, payload)
+	}
+
+	// Verify no chat messages in phase 1.
+	for _, frame := range phase1Frames {
+		if isTextMessageFrame(frame) {
+			t.Error("chat message was replayed during config-only phase (69420)")
+		}
+	}
+
+	// Phase 2: nodes-only (69421) — should include chat after nodes.
+	p.replayCachedConfig(client, nonceOnlyNodes)
+
+	var phase2Frames [][]byte
+	for {
+		_ = serverConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		payload, err := protocol.ReadFrame(serverConn)
+		if err != nil {
+			break
+		}
+		phase2Frames = append(phase2Frames, payload)
+	}
+
+	// Last frame in phase 2 should be the chat message.
+	foundChat := false
+	for _, frame := range phase2Frames {
+		if isTextMessageFrame(frame) {
+			foundChat = true
+		}
+	}
+	if !foundChat {
+		t.Error("chat message was NOT replayed after nodes-only phase (69421)")
+	}
+}
+
+func TestChatReplay_NotAfterIOSConfigPhase(t *testing.T) {
+	// Verify chat is NOT replayed after the first iOS phase (69420).
+	myNum := uint32(0x12345678)
+	cache := buildTestCache(t, myNum, nil)
+	p, _ := newTestProxy(t, cache, 100)
+
+	chatMsg := buildTextMessagePayload(t, 0xAAAAAAAA, 0xFFFFFFFF, "should not replay yet")
+	p.cacheTextMessage(chatMsg)
+
+	serverConn, clientConn := newTestConnPair(t)
+	m := metrics.New(10, 300)
+	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client.Start(ctx)
+
+	p.replayCachedConfig(client, nonceOnlyConfig)
+
+	var frames [][]byte
+	for {
+		_ = serverConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		payload, err := protocol.ReadFrame(serverConn)
+		if err != nil {
+			break
+		}
+		frames = append(frames, payload)
+	}
+
+	for _, frame := range frames {
+		if isTextMessageFrame(frame) {
+			t.Error("chat message was replayed during config-only phase — should wait for nodes phase")
+		}
+	}
+}
+
+func TestChatReplay_OutgoingMessagesCached(t *testing.T) {
+	// Verify that outgoing (ToRadio) text messages are cached and replayed.
+	myNum := uint32(0x12345678)
+	cache := buildTestCache(t, myNum, nil)
+	p, _ := newTestProxy(t, cache, 100)
+
+	// Simulate an outgoing text message being cached.
+	toRadioPayload := buildToRadioTextMessage(t, 0, 0xFFFFFFFF, "outgoing msg")
+	fromRadioPayload := p.toRadioToFromRadio(toRadioPayload)
+	if fromRadioPayload == nil {
+		t.Fatal("toRadioToFromRadio returned nil")
+	}
+	p.cacheTextMessage(fromRadioPayload)
+
+	// Now replay to a new client.
+	serverConn, clientConn := newTestConnPair(t)
+	m := metrics.New(10, 300)
+	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client.Start(ctx)
+
+	p.replayCachedConfig(client, 12345)
+
+	var frames [][]byte
+	for {
+		_ = serverConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		payload, err := protocol.ReadFrame(serverConn)
+		if err != nil {
+			break
+		}
+		frames = append(frames, payload)
+	}
+
+	// Last frame should be the outgoing text message (now as FromRadio).
+	lastFrame := frames[len(frames)-1]
+	if !isTextMessageFrame(lastFrame) {
+		t.Error("outgoing message was not replayed as chat history")
+	}
+
+	// Verify From was filled with myNodeNum.
+	fr := &pb.FromRadio{}
+	if err := proto.Unmarshal(lastFrame, fr); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if fr.GetPacket().GetFrom() != myNum {
+		t.Errorf("From = %08x, want %08x", fr.GetPacket().GetFrom(), myNum)
 	}
 }

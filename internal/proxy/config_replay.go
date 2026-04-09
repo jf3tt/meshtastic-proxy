@@ -17,6 +17,12 @@ const (
 	nonceOnlyNodes  = 69421 // NodeInfo DB only, skip config
 )
 
+// configPhase bitmask values for tracking iOS two-phase config completion.
+const (
+	configPhaseConfig uint32 = 1 << iota // bit 0: seen nonce 69420
+	configPhaseNodes                     // bit 1: seen nonce 69421
+)
+
 // filterStats contains diagnostic information about a filterConfigCache operation.
 type filterStats struct {
 	MyNodeNum    uint32
@@ -48,6 +54,14 @@ func (p *Proxy) replayCachedConfig(c *Client, clientNonce uint32) {
 	if len(frames) == 0 {
 		p.logger.Debug("no cached config for replay", "client", c.Addr())
 		return
+	}
+
+	// Track iOS config phases for chat replay timing.
+	switch clientNonce {
+	case nonceOnlyConfig:
+		c.configPhase.Or(configPhaseConfig)
+	case nonceOnlyNodes:
+		c.configPhase.Or(configPhaseNodes)
 	}
 
 	// Filter frames based on special nonces (iOS two-phase config).
@@ -140,6 +154,16 @@ func (p *Proxy) replayCachedConfig(c *Client, clientNonce uint32) {
 		"type", reqType,
 		"client_nonce", clientNonce,
 	)
+
+	// Replay chat history after config delivery, if appropriate.
+	// For iOS: only after the nodes-only phase (69421), which is the second
+	// and final phase. Not after config-only (69420), because the client
+	// hasn't finished loading yet.
+	// For Python CLI / random nonce: replay immediately after the single
+	// config replay.
+	if p.shouldReplayChat(clientNonce, c) {
+		p.replayChatHistory(c)
+	}
 }
 
 // filterConfigCache returns a subset of cached config frames based on the
@@ -241,4 +265,59 @@ func filterConfigCache(frames [][]byte, nonce uint32) filterResult {
 		}
 	}
 	return filterResult{Frames: result, Stats: stats}
+}
+
+// shouldReplayChat determines whether chat history should be replayed after
+// a config replay with the given nonce. The logic handles iOS two-phase config:
+//   - Random nonce (Python CLI, etc.): replay immediately — single config phase.
+//   - Nonce 69420 (iOS config-only, first phase): do NOT replay — wait for second phase.
+//   - Nonce 69421 (iOS nodes-only, second phase): replay — both phases complete.
+func (p *Proxy) shouldReplayChat(nonce uint32, c *Client) bool {
+	if p.maxChatCache <= 0 {
+		return false
+	}
+
+	switch nonce {
+	case nonceOnlyConfig:
+		// iOS first phase — do not replay yet.
+		return false
+	case nonceOnlyNodes:
+		// iOS second phase — replay if config phase was also seen.
+		return c.configPhase.Load()&configPhaseConfig != 0
+	default:
+		// Random nonce (Python CLI, etc.) — single phase, replay now.
+		return true
+	}
+}
+
+// replayChatHistory sends all cached text messages to the client.
+// Called after config replay is complete for the final phase.
+func (p *Proxy) replayChatHistory(c *Client) {
+	messages := p.chatCacheSnapshot()
+	if len(messages) == 0 {
+		return
+	}
+
+	p.logger.Debug("replaying chat history",
+		"client", c.Addr(),
+		"messages", len(messages),
+	)
+
+	sent := 0
+	for _, payload := range messages {
+		if !c.Send(payload) {
+			p.logger.Debug("chat replay interrupted, client disconnected",
+				"client", c.Addr(),
+				"sent", sent,
+				"total", len(messages),
+			)
+			return
+		}
+		sent++
+	}
+
+	p.logger.Debug("replayed chat history to client",
+		"client", c.Addr(),
+		"messages", sent,
+	)
 }

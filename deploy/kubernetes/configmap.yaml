@@ -11,11 +11,19 @@ data:
     address = "10.10.0.3:4403"
     reconnect_interval = "1s"
     max_reconnect_interval = "30s"
+    dial_timeout = "10s"
+    read_timeout = "5m"
     heartbeat_interval = "1m"
+    from_buffer = 256
+    to_buffer = 64
 
     [proxy]
     listen = "0.0.0.0:4404"
     max_clients = 10
+    client_send_buffer = 256
+    client_idle_timeout = "30m"
+    ios_nodeinfo_delay = "50ms"
+    max_chat_cache = 1000
 
     [web]
     listen = "0.0.0.0:8090"
@@ -34,3 +42,7 @@ data:
     [logging]
     level = "debug"
     format = "text"
+
+    [metrics]
+    max_messages = 200
+    max_traffic_samples = 300

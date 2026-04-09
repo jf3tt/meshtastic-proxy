@@ -37,6 +37,7 @@ type ProxyConfig struct {
 	ClientSendBuffer  int      `toml:"client_send_buffer"`
 	ClientIdleTimeout Duration `toml:"client_idle_timeout"`
 	IOSNodeInfoDelay  Duration `toml:"ios_nodeinfo_delay"`
+	MaxChatCache      int      `toml:"max_chat_cache"`
 }
 
 // MetricsConfig holds settings for the metrics collector.
@@ -108,6 +109,7 @@ func DefaultConfig() *Config {
 			ClientSendBuffer:  256,
 			ClientIdleTimeout: Duration{30 * time.Minute},
 			IOSNodeInfoDelay:  Duration{50 * time.Millisecond},
+			MaxChatCache:      1000,
 		},
 		Web: WebConfig{
 			Listen:  ":8080",
@@ -193,6 +195,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Proxy.IOSNodeInfoDelay.Duration < 0 {
 		return fmt.Errorf("proxy.ios_nodeinfo_delay must not be negative")
+	}
+	if c.Proxy.MaxChatCache < 0 {
+		return fmt.Errorf("proxy.max_chat_cache must not be negative")
 	}
 	if c.Node.ReconnectInterval.Duration < 100*time.Millisecond {
 		return fmt.Errorf("node.reconnect_interval must be at least 100ms")

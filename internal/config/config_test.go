@@ -42,6 +42,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Proxy.IOSNodeInfoDelay.Duration != 50*time.Millisecond {
 		t.Fatalf("unexpected default iOS nodeinfo delay: %v", cfg.Proxy.IOSNodeInfoDelay.Duration)
 	}
+	if cfg.Proxy.MaxChatCache != 1000 {
+		t.Fatalf("unexpected default max chat cache: %d", cfg.Proxy.MaxChatCache)
+	}
 	if cfg.Web.Listen != ":8080" {
 		t.Fatalf("unexpected default web listen: %s", cfg.Web.Listen)
 	}
@@ -249,6 +252,16 @@ func TestValidation(t *testing.T) {
 			name:    "zero client send buffer",
 			modify:  func(c *Config) { c.Proxy.ClientSendBuffer = 0 },
 			wantErr: true,
+		},
+		{
+			name:    "negative max chat cache",
+			modify:  func(c *Config) { c.Proxy.MaxChatCache = -1 },
+			wantErr: true,
+		},
+		{
+			name:    "zero max chat cache disables feature",
+			modify:  func(c *Config) { c.Proxy.MaxChatCache = 0 },
+			wantErr: false,
 		},
 		{
 			name:    "zero from buffer",

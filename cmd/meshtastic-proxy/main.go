@@ -70,6 +70,7 @@ func main() {
 		ClientSendBuffer:  cfg.Proxy.ClientSendBuffer,
 		ClientIdleTimeout: cfg.Proxy.ClientIdleTimeout.Duration,
 		IOSNodeInfoDelay:  cfg.Proxy.IOSNodeInfoDelay.Duration,
+		MaxChatCache:      cfg.Proxy.MaxChatCache,
 		NodeConn:          nodeConn,
 		Metrics:           m,
 		Logger:            logger.With("component", "proxy"),

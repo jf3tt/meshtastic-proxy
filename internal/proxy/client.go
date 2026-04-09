@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jfett/meshtastic-proxy/internal/metrics"
@@ -53,6 +54,12 @@ type Client struct {
 	// disconnectReason records why this client was disconnected.
 	disconnectMu     sync.Mutex
 	disconnectReason DisconnectReason
+
+	// configPhase tracks which iOS config phases have been completed.
+	// Bit 0 (1): seen nonce 69420 (config-only phase).
+	// Bit 1 (2): seen nonce 69421 (nodes-only phase).
+	// Used to determine when to replay chat history for iOS clients.
+	configPhase atomic.Uint32
 }
 
 // NewClient creates a new client handler.
