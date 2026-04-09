@@ -10,12 +10,13 @@ import (
 
 // Config represents the application configuration.
 type Config struct {
-	Node    NodeConfig    `toml:"node"`
-	Proxy   ProxyConfig   `toml:"proxy"`
-	Web     WebConfig     `toml:"web"`
-	MDNS    MDNSConfig    `toml:"mdns"`
-	Logging LoggingConfig `toml:"logging"`
-	Metrics MetricsConfig `toml:"metrics"`
+	Node     NodeConfig     `toml:"node"`
+	Proxy    ProxyConfig    `toml:"proxy"`
+	Web      WebConfig      `toml:"web"`
+	MDNS     MDNSConfig     `toml:"mdns"`
+	Telegram TelegramConfig `toml:"telegram"`
+	Logging  LoggingConfig  `toml:"logging"`
+	Metrics  MetricsConfig  `toml:"metrics"`
 }
 
 // NodeConfig holds settings for the upstream Meshtastic node connection.
@@ -56,6 +57,14 @@ type WebConfig struct {
 type LoggingConfig struct {
 	Level  string `toml:"level"`  // debug, info, warn, error
 	Format string `toml:"format"` // text, json
+}
+
+// TelegramConfig holds settings for the Telegram bot integration.
+// When Token is non-empty, the proxy forwards mesh text messages to a Telegram channel.
+type TelegramConfig struct {
+	Token    string `toml:"token"`    // Telegram Bot API token
+	ChatID   int64  `toml:"chat_id"`  // Target channel/group chat ID
+	Channels []int  `toml:"channels"` // Mesh channel indices to forward (e.g. [0, 1]); empty = primary only [0]
 }
 
 // MDNSConfig holds settings for mDNS service advertisement.
@@ -157,10 +166,12 @@ func Load(path string) (*Config, error) {
 // applyEnvOverrides applies environment variable overrides to the config.
 // Supported variables:
 //
-//	MESHTASTIC_NODE_ADDRESS  -> node.address
-//	MESHTASTIC_PROXY_LISTEN  -> proxy.listen
-//	MESHTASTIC_WEB_LISTEN    -> web.listen
-//	MESHTASTIC_LOG_LEVEL     -> logging.level
+//	MESHTASTIC_NODE_ADDRESS     -> node.address
+//	MESHTASTIC_PROXY_LISTEN     -> proxy.listen
+//	MESHTASTIC_WEB_LISTEN       -> web.listen
+//	MESHTASTIC_LOG_LEVEL        -> logging.level
+//	MESHTASTIC_TELEGRAM_TOKEN   -> telegram.token
+//	MESHTASTIC_TELEGRAM_CHAT_ID -> telegram.chat_id
 func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("MESHTASTIC_NODE_ADDRESS"); v != "" {
 		cfg.Node.Address = v
@@ -173,6 +184,15 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("MESHTASTIC_LOG_LEVEL"); v != "" {
 		cfg.Logging.Level = v
+	}
+	if v := os.Getenv("MESHTASTIC_TELEGRAM_TOKEN"); v != "" {
+		cfg.Telegram.Token = v
+	}
+	if v := os.Getenv("MESHTASTIC_TELEGRAM_CHAT_ID"); v != "" {
+		var chatID int64
+		if _, err := fmt.Sscanf(v, "%d", &chatID); err == nil {
+			cfg.Telegram.ChatID = chatID
+		}
 	}
 }
 
@@ -256,6 +276,14 @@ func (c *Config) Validate() error {
 			if iface == "" {
 				return fmt.Errorf("mdns.interfaces[%d] must not be empty", i)
 			}
+		}
+	}
+	if c.Telegram.Token != "" && c.Telegram.ChatID == 0 {
+		return fmt.Errorf("telegram.chat_id is required when telegram.token is set")
+	}
+	for i, ch := range c.Telegram.Channels {
+		if ch < 0 || ch > 7 {
+			return fmt.Errorf("telegram.channels[%d]: channel index %d out of range (must be 0-7)", i, ch)
 		}
 	}
 	return nil

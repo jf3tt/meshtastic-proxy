@@ -16,6 +16,7 @@ import (
 	"github.com/jfett/meshtastic-proxy/internal/metrics"
 	"github.com/jfett/meshtastic-proxy/internal/node"
 	"github.com/jfett/meshtastic-proxy/internal/proxy"
+	"github.com/jfett/meshtastic-proxy/internal/telegram"
 	"github.com/jfett/meshtastic-proxy/internal/web"
 )
 
@@ -126,6 +127,16 @@ func main() {
 				errCh <- adv.Run(ctx)
 			}()
 		}
+	}
+
+	// Start Telegram bridge (optional — only if token is configured)
+	if cfg.Telegram.Token != "" {
+		tgBot := telegram.New(cfg.Telegram, m, logger.With("component", "telegram"))
+		go func() {
+			if err := tgBot.Run(ctx); err != nil {
+				logger.Error("telegram bot failed", "error", err)
+			}
+		}()
 	}
 
 	// Wait for shutdown signal or error

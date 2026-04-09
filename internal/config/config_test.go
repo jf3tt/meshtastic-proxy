@@ -335,6 +335,26 @@ func TestValidation(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name:    "telegram channel index negative",
+			modify:  func(c *Config) { c.Telegram.Channels = []int{0, -1} },
+			wantErr: true,
+		},
+		{
+			name:    "telegram channel index too high",
+			modify:  func(c *Config) { c.Telegram.Channels = []int{8} },
+			wantErr: true,
+		},
+		{
+			name:    "telegram valid channels",
+			modify:  func(c *Config) { c.Telegram.Channels = []int{0, 1, 7} },
+			wantErr: false,
+		},
+		{
+			name:    "telegram empty channels valid",
+			modify:  func(c *Config) { c.Telegram.Channels = []int{} },
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {

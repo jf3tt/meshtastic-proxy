@@ -1,10 +1,12 @@
 # Meshtastic TCP Proxy configuration
 #
 # Environment variable overrides (take precedence over TOML values):
-#   MESHTASTIC_NODE_ADDRESS  -> node.address
-#   MESHTASTIC_PROXY_LISTEN  -> proxy.listen
-#   MESHTASTIC_WEB_LISTEN    -> web.listen
-#   MESHTASTIC_LOG_LEVEL     -> logging.level
+#   MESHTASTIC_NODE_ADDRESS     -> node.address
+#   MESHTASTIC_PROXY_LISTEN     -> proxy.listen
+#   MESHTASTIC_WEB_LISTEN       -> web.listen
+#   MESHTASTIC_LOG_LEVEL        -> logging.level
+#   MESHTASTIC_TELEGRAM_TOKEN   -> telegram.token
+#   MESHTASTIC_TELEGRAM_CHAT_ID -> telegram.chat_id
 
 [node]
 # Address of the Meshtastic node (host:port)
@@ -89,6 +91,19 @@ id = ""
 # and avoid advertising on CNI/overlay interfaces (cni0, flannel.1, etc.).
 # When empty, the system default multicast interface is used (original behaviour).
 # interfaces = ["eth0"]
+
+[telegram]
+# Telegram bot integration — forwards mesh text messages to a Telegram channel.
+# Optional: leave token empty to disable. Can also be set via environment variables:
+#   MESHTASTIC_TELEGRAM_TOKEN   — Bot API token (from @BotFather)
+#   MESHTASTIC_TELEGRAM_CHAT_ID — Target channel/group chat ID
+#
+# token = ""
+# chat_id = 0
+#
+# Mesh channel indices to forward to Telegram (0-7). Default: [0] (primary only).
+# Example: channels = [0, 1]  — forward primary and first secondary channel.
+# channels = [0]
 
 [logging]
 # Log level: debug, info, warn, error

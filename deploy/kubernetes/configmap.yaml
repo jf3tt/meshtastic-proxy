@@ -46,3 +46,12 @@ data:
     [metrics]
     max_messages = 200
     max_traffic_samples = 300
+
+    [telegram]
+    # Telegram bot integration — forwards mesh text messages to a Telegram channel.
+    # Leave token empty to disable.
+    token = ""
+    chat_id = ""
+    #
+    # Mesh channel indices to forward to Telegram (0-7). Default: [0] (primary only).
+    channels = [0, 1]

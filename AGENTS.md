@@ -19,6 +19,7 @@ Meshtastic Node (TCP :4403)
    Other components:
    ├── discovery.Advertiser  ← mDNS (_meshtastic._tcp), multi-interface support
    ├── web.Server            ← HTTP dashboard + SSE + metrics API
+   ├── telegram.Bot          ← LoRa → Telegram bridge (optional, via pub/sub)
    └── metrics.Metrics       ← counters, ring buffers, pub/sub for SSE
 ```
 
@@ -34,6 +35,7 @@ Meshtastic Node (TCP :4403)
 | `discovery` | `internal/discovery/` | mDNS advertisement via hashicorp/mdns, multi-interface |
 | `metrics` | `internal/metrics/` | Runtime stats, message log, traffic time-series, SSE pub/sub |
 | `web` | `internal/web/` | HTTP server, dashboard, SSE endpoint |
+| `telegram` | `internal/telegram/` | LoRa → Telegram bridge (optional, one-way text message forwarding) |
 
 ### Key Dependencies
 
