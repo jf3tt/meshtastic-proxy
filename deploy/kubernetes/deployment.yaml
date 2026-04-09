@@ -31,7 +31,7 @@ spec:
 
       containers:
         - name: meshtastic-proxy
-          image: ghcr.io/jf3tt/meshtastic-proxy:dev
+          image: ghcr.io/jf3tt/meshtastic-proxy:latest
           imagePullPolicy: Always
           args:
             - -config

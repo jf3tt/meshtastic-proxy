@@ -8,7 +8,7 @@ metadata:
 data:
   config.toml: |
     [node]
-    address = "10.10.0.3:4403"
+    address = "10.10.0.180:4403"
     reconnect_interval = "1s"
     max_reconnect_interval = "30s"
     dial_timeout = "10s"

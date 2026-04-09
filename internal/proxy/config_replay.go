@@ -290,30 +290,46 @@ func (p *Proxy) shouldReplayChat(nonce uint32, c *Client) bool {
 	}
 }
 
-// replayChatHistory sends all cached text messages to the client.
-// Called after config replay is complete for the final phase.
+// replayChatHistory sends all cached text messages (and their ACKs) to the
+// client. Called after config replay is complete for the final phase.
+// Each message is followed by its routing ACK if one has been received,
+// so that iOS shows the correct "delivered" status instead of
+// "waiting to be acknowledged".
 func (p *Proxy) replayChatHistory(c *Client) {
-	messages := p.chatCacheSnapshot()
-	if len(messages) == 0 {
+	entries := p.chatCacheSnapshot()
+	if len(entries) == 0 {
 		return
 	}
 
 	p.logger.Debug("replaying chat history",
 		"client", c.Addr(),
-		"messages", len(messages),
+		"messages", len(entries),
 	)
 
 	sent := 0
-	for _, payload := range messages {
-		if !c.Send(payload) {
+	for _, entry := range entries {
+		if !c.Send(entry.message) {
 			p.logger.Debug("chat replay interrupted, client disconnected",
 				"client", c.Addr(),
 				"sent", sent,
-				"total", len(messages),
+				"total", len(entries),
 			)
 			return
 		}
 		sent++
+
+		// Send the routing ACK immediately after the message so that
+		// the client sees the message as delivered.
+		if entry.ack != nil {
+			if !c.Send(entry.ack) {
+				p.logger.Debug("chat replay interrupted during ACK, client disconnected",
+					"client", c.Addr(),
+					"sent", sent,
+					"total", len(entries),
+				)
+				return
+			}
+		}
 	}
 
 	p.logger.Debug("replayed chat history to client",

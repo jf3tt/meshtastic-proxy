@@ -43,7 +43,15 @@ type Proxy struct {
 
 	// chatMu protects chatCache.
 	chatMu    sync.RWMutex
-	chatCache [][]byte // ring buffer of cached FromRadio text message payloads
+	chatCache []chatEntry // ring buffer of cached chat messages with optional ACKs
+}
+
+// chatEntry holds a cached text message alongside its optional routing ACK.
+// The ACK may arrive after the text message; cacheACK fills it in later.
+type chatEntry struct {
+	message  []byte // FromRadio text message protobuf payload
+	packetID uint32 // MeshPacket.Id for matching the routing ACK
+	ack      []byte // FromRadio routing ACK protobuf payload (nil until ACK arrives)
 }
 
 // Options holds all configuration for creating a new Proxy.
@@ -293,6 +301,9 @@ func (p *Proxy) broadcastLoop(ctx context.Context) {
 			// Cache incoming text messages for replay to new/reconnecting clients.
 			if isTextMessageFrame(payload) {
 				p.cacheTextMessage(payload)
+			} else if packetID, ok := isRoutingACKFrame(payload); ok {
+				// Associate routing ACK with a previously cached text message.
+				p.cacheACK(packetID, payload)
 			}
 			p.broadcast(payload)
 		}
@@ -487,14 +498,20 @@ func (p *Proxy) cacheTextMessage(payload []byte) {
 	cp := make([]byte, len(payload))
 	copy(cp, payload)
 
+	// Extract MeshPacket.Id for ACK matching.
+	packetID := extractPacketID(payload)
+
 	p.chatMu.Lock()
-	p.chatCache = append(p.chatCache, cp)
+	p.chatCache = append(p.chatCache, chatEntry{
+		message:  cp,
+		packetID: packetID,
+	})
 	if len(p.chatCache) > p.maxChatCache {
 		// Drop oldest entries beyond the limit.
 		excess := len(p.chatCache) - p.maxChatCache
 		// Zero out dropped slice elements to allow GC.
 		for i := 0; i < excess; i++ {
-			p.chatCache[i] = nil
+			p.chatCache[i] = chatEntry{}
 		}
 		p.chatCache = p.chatCache[excess:]
 	}
@@ -502,7 +519,7 @@ func (p *Proxy) cacheTextMessage(payload []byte) {
 }
 
 // chatCacheSnapshot returns a copy of the current chat cache.
-func (p *Proxy) chatCacheSnapshot() [][]byte {
+func (p *Proxy) chatCacheSnapshot() []chatEntry {
 	p.chatMu.RLock()
 	defer p.chatMu.RUnlock()
 
@@ -510,11 +527,97 @@ func (p *Proxy) chatCacheSnapshot() [][]byte {
 		return nil
 	}
 
-	result := make([][]byte, len(p.chatCache))
-	for i, frame := range p.chatCache {
-		cp := make([]byte, len(frame))
-		copy(cp, frame)
-		result[i] = cp
+	result := make([]chatEntry, len(p.chatCache))
+	for i, entry := range p.chatCache {
+		msgCp := make([]byte, len(entry.message))
+		copy(msgCp, entry.message)
+		e := chatEntry{
+			message:  msgCp,
+			packetID: entry.packetID,
+		}
+		if entry.ack != nil {
+			ackCp := make([]byte, len(entry.ack))
+			copy(ackCp, entry.ack)
+			e.ack = ackCp
+		}
+		result[i] = e
 	}
 	return result
+}
+
+// extractPacketID extracts MeshPacket.Id from a FromRadio protobuf payload.
+// Returns 0 if the payload cannot be parsed or is not a MeshPacket.
+func extractPacketID(payload []byte) uint32 {
+	msg := &pb.FromRadio{}
+	if err := proto.Unmarshal(payload, msg); err != nil {
+		return 0
+	}
+	pkt, ok := msg.GetPayloadVariant().(*pb.FromRadio_Packet)
+	if !ok || pkt.Packet == nil {
+		return 0
+	}
+	return pkt.Packet.GetId()
+}
+
+// isRoutingACKFrame checks whether the FromRadio payload is a routing ACK
+// (PortNum_ROUTING_APP with ErrorReason == NONE and a non-zero RequestId).
+// Returns the RequestId (which matches the original message's MeshPacket.Id)
+// and true if this is an ACK; otherwise returns 0, false.
+func isRoutingACKFrame(payload []byte) (packetID uint32, ok bool) {
+	msg := &pb.FromRadio{}
+	if err := proto.Unmarshal(payload, msg); err != nil {
+		return 0, false
+	}
+	pkt, isPkt := msg.GetPayloadVariant().(*pb.FromRadio_Packet)
+	if !isPkt || pkt.Packet == nil {
+		return 0, false
+	}
+	decoded, isDec := pkt.Packet.GetPayloadVariant().(*pb.MeshPacket_Decoded)
+	if !isDec || decoded.Decoded == nil {
+		return 0, false
+	}
+	if decoded.Decoded.GetPortnum() != pb.PortNum_ROUTING_APP {
+		return 0, false
+	}
+	reqID := decoded.Decoded.GetRequestId()
+	if reqID == 0 {
+		return 0, false
+	}
+	// Parse the Routing protobuf to check ErrorReason.
+	routing := &pb.Routing{}
+	if err := proto.Unmarshal(decoded.Decoded.GetPayload(), routing); err != nil {
+		return 0, false
+	}
+	errReason, isErr := routing.GetVariant().(*pb.Routing_ErrorReason)
+	if !isErr {
+		return 0, false
+	}
+	if errReason.ErrorReason != pb.Routing_NONE {
+		return 0, false // NACK — not a successful ACK
+	}
+	return reqID, true
+}
+
+// cacheACK associates a routing ACK payload with a previously cached text
+// message that has the matching packetID. Searches from the end of the cache
+// (ACKs typically arrive shortly after the message). Does nothing if no match
+// is found or if the entry already has an ACK.
+func (p *Proxy) cacheACK(packetID uint32, payload []byte) {
+	if p.maxChatCache <= 0 || packetID == 0 {
+		return
+	}
+
+	cp := make([]byte, len(payload))
+	copy(cp, payload)
+
+	p.chatMu.Lock()
+	defer p.chatMu.Unlock()
+
+	// Search from the end — ACK usually arrives soon after the message.
+	for i := len(p.chatCache) - 1; i >= 0; i-- {
+		if p.chatCache[i].packetID == packetID && p.chatCache[i].ack == nil {
+			p.chatCache[i].ack = cp
+			return
+		}
+	}
 }

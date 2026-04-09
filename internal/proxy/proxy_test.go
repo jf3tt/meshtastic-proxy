@@ -2104,7 +2104,7 @@ func TestCacheTextMessage_RingBufferEviction(t *testing.T) {
 
 	// Verify oldest messages were evicted: first cached message should be "msg2".
 	fr := &pb.FromRadio{}
-	if err := proto.Unmarshal(snapshot[0], fr); err != nil {
+	if err := proto.Unmarshal(snapshot[0].message, fr); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	pkt := fr.GetPacket()
@@ -2134,11 +2134,11 @@ func TestCacheTextMessage_SnapshotIsCopy(t *testing.T) {
 
 	snapshot1 := p.chatCacheSnapshot()
 	// Mutate the snapshot.
-	snapshot1[0][0] = 0xFF
+	snapshot1[0].message[0] = 0xFF
 
 	// Original cache should not be affected.
 	snapshot2 := p.chatCacheSnapshot()
-	if snapshot2[0][0] == 0xFF {
+	if snapshot2[0].message[0] == 0xFF {
 		t.Error("chatCacheSnapshot returned a reference, not a copy")
 	}
 }
@@ -2575,5 +2575,663 @@ func TestChatReplay_OutgoingMessagesCached(t *testing.T) {
 	}
 	if fr.GetPacket().GetFrom() != myNum {
 		t.Errorf("From = %08x, want %08x", fr.GetPacket().GetFrom(), myNum)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ACK caching test helpers
+// ---------------------------------------------------------------------------
+
+// buildTextMessagePayloadWithID creates a FromRadio text message with a specific packet ID.
+func buildTextMessagePayloadWithID(t *testing.T, from, to, id uint32, text string) []byte {
+	t.Helper()
+	return marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From: from,
+				To:   to,
+				Id:   id,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum: pb.PortNum_TEXT_MESSAGE_APP,
+						Payload: []byte(text),
+					},
+				},
+			},
+		},
+	})
+}
+
+// buildRoutingACKPayload creates a FromRadio routing ACK for the given requestID.
+// This simulates the ACK that the node sends back after delivering a message.
+func buildRoutingACKPayload(t *testing.T, from, to, id, requestID uint32) []byte {
+	t.Helper()
+	routingData, err := proto.Marshal(&pb.Routing{
+		Variant: &pb.Routing_ErrorReason{
+			ErrorReason: pb.Routing_NONE,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal routing: %v", err)
+	}
+	return marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From: from,
+				To:   to,
+				Id:   id,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum:   pb.PortNum_ROUTING_APP,
+						RequestId: requestID,
+						Payload:   routingData,
+					},
+				},
+			},
+		},
+	})
+}
+
+// buildRoutingNACKPayload creates a FromRadio routing NACK (error) for the given requestID.
+func buildRoutingNACKPayload(t *testing.T, from, to, id, requestID uint32, reason pb.Routing_Error) []byte {
+	t.Helper()
+	routingData, err := proto.Marshal(&pb.Routing{
+		Variant: &pb.Routing_ErrorReason{
+			ErrorReason: reason,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal routing: %v", err)
+	}
+	return marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From: from,
+				To:   to,
+				Id:   id,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum:   pb.PortNum_ROUTING_APP,
+						RequestId: requestID,
+						Payload:   routingData,
+					},
+				},
+			},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// isRoutingACKFrame tests
+// ---------------------------------------------------------------------------
+
+func TestIsRoutingACKFrame_ValidACK(t *testing.T) {
+	ackPayload := buildRoutingACKPayload(t, 0xBBBBBBBB, 0x12345678, 200, 42)
+	packetID, ok := isRoutingACKFrame(ackPayload)
+	if !ok {
+		t.Fatal("isRoutingACKFrame returned false for valid ACK")
+	}
+	if packetID != 42 {
+		t.Errorf("packetID = %d, want 42", packetID)
+	}
+}
+
+func TestIsRoutingACKFrame_NACK(t *testing.T) {
+	nackPayload := buildRoutingNACKPayload(t, 0xBBBBBBBB, 0x12345678, 200, 42, pb.Routing_NO_RESPONSE)
+	_, ok := isRoutingACKFrame(nackPayload)
+	if ok {
+		t.Error("isRoutingACKFrame returned true for NACK (NO_RESPONSE)")
+	}
+}
+
+func TestIsRoutingACKFrame_NonRouting(t *testing.T) {
+	textPayload := buildTextMessagePayload(t, 0x12345678, 0xFFFFFFFF, "hello")
+	_, ok := isRoutingACKFrame(textPayload)
+	if ok {
+		t.Error("isRoutingACKFrame returned true for text message")
+	}
+}
+
+func TestIsRoutingACKFrame_InvalidPayload(t *testing.T) {
+	_, ok := isRoutingACKFrame([]byte{0xFF, 0xFF})
+	if ok {
+		t.Error("isRoutingACKFrame returned true for invalid payload")
+	}
+}
+
+func TestIsRoutingACKFrame_ZeroRequestID(t *testing.T) {
+	// Routing packet with RequestId=0 should not be treated as ACK.
+	routingData, err := proto.Marshal(&pb.Routing{
+		Variant: &pb.Routing_ErrorReason{ErrorReason: pb.Routing_NONE},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From: 0xBBBBBBBB,
+				To:   0x12345678,
+				Id:   200,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum:   pb.PortNum_ROUTING_APP,
+						RequestId: 0, // zero
+						Payload:   routingData,
+					},
+				},
+			},
+		},
+	})
+	_, ok := isRoutingACKFrame(payload)
+	if ok {
+		t.Error("isRoutingACKFrame returned true for RequestId=0")
+	}
+}
+
+func TestIsRoutingACKFrame_EncryptedPacket(t *testing.T) {
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From:           0xBBBBBBBB,
+				To:             0x12345678,
+				PayloadVariant: &pb.MeshPacket_Encrypted{Encrypted: []byte{0x01}},
+			},
+		},
+	})
+	_, ok := isRoutingACKFrame(payload)
+	if ok {
+		t.Error("isRoutingACKFrame returned true for encrypted packet")
+	}
+}
+
+func TestIsRoutingACKFrame_ConfigFrame(t *testing.T) {
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_MyInfo{MyInfo: &pb.MyNodeInfo{MyNodeNum: 1}},
+	})
+	_, ok := isRoutingACKFrame(payload)
+	if ok {
+		t.Error("isRoutingACKFrame returned true for config frame")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// extractPacketID tests
+// ---------------------------------------------------------------------------
+
+func TestExtractPacketID_TextMessage(t *testing.T) {
+	payload := buildTextMessagePayloadWithID(t, 0x12345678, 0xFFFFFFFF, 42, "hello")
+	id := extractPacketID(payload)
+	if id != 42 {
+		t.Errorf("extractPacketID = %d, want 42", id)
+	}
+}
+
+func TestExtractPacketID_ConfigFrame(t *testing.T) {
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_MyInfo{MyInfo: &pb.MyNodeInfo{MyNodeNum: 1}},
+	})
+	id := extractPacketID(payload)
+	if id != 0 {
+		t.Errorf("extractPacketID = %d, want 0 for config frame", id)
+	}
+}
+
+func TestExtractPacketID_InvalidPayload(t *testing.T) {
+	id := extractPacketID([]byte{0xFF})
+	if id != 0 {
+		t.Errorf("extractPacketID = %d, want 0 for invalid payload", id)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// cacheACK tests
+// ---------------------------------------------------------------------------
+
+func TestCacheACK_MatchesMessage(t *testing.T) {
+	p, _ := newTestProxy(t, nil, 100)
+
+	// Cache a text message with packet ID 42.
+	textPayload := buildTextMessagePayloadWithID(t, 0x12345678, 0xFFFFFFFF, 42, "hello")
+	p.cacheTextMessage(textPayload)
+
+	// Cache the ACK for packet ID 42.
+	ackPayload := buildRoutingACKPayload(t, 0xBBBBBBBB, 0x12345678, 200, 42)
+	p.cacheACK(42, ackPayload)
+
+	snapshot := p.chatCacheSnapshot()
+	if len(snapshot) != 1 {
+		t.Fatalf("cache size = %d, want 1", len(snapshot))
+	}
+	if snapshot[0].ack == nil {
+		t.Fatal("ACK was not associated with the text message")
+	}
+	if snapshot[0].packetID != 42 {
+		t.Errorf("packetID = %d, want 42", snapshot[0].packetID)
+	}
+}
+
+func TestCacheACK_NoMatch(t *testing.T) {
+	p, _ := newTestProxy(t, nil, 100)
+
+	// Cache a text message with packet ID 42.
+	textPayload := buildTextMessagePayloadWithID(t, 0x12345678, 0xFFFFFFFF, 42, "hello")
+	p.cacheTextMessage(textPayload)
+
+	// Try to cache ACK for a different packet ID (99).
+	ackPayload := buildRoutingACKPayload(t, 0xBBBBBBBB, 0x12345678, 200, 99)
+	p.cacheACK(99, ackPayload)
+
+	snapshot := p.chatCacheSnapshot()
+	if snapshot[0].ack != nil {
+		t.Error("ACK was associated with wrong message — should have been ignored")
+	}
+}
+
+func TestCacheACK_DuplicateIgnored(t *testing.T) {
+	p, _ := newTestProxy(t, nil, 100)
+
+	textPayload := buildTextMessagePayloadWithID(t, 0x12345678, 0xFFFFFFFF, 42, "hello")
+	p.cacheTextMessage(textPayload)
+
+	ack1 := buildRoutingACKPayload(t, 0xBBBBBBBB, 0x12345678, 200, 42)
+	ack2 := buildRoutingACKPayload(t, 0xCCCCCCCC, 0x12345678, 300, 42)
+	p.cacheACK(42, ack1)
+	p.cacheACK(42, ack2) // should be ignored — already has ACK
+
+	snapshot := p.chatCacheSnapshot()
+	// The first ACK should be kept, not replaced.
+	fr := &pb.FromRadio{}
+	if err := proto.Unmarshal(snapshot[0].ack, fr); err != nil {
+		t.Fatalf("unmarshal ack: %v", err)
+	}
+	pkt := fr.GetPacket()
+	if pkt.GetFrom() != 0xBBBBBBBB {
+		t.Errorf("ACK From = %08x, want BBBBBBBB (first ACK)", pkt.GetFrom())
+	}
+}
+
+func TestCacheACK_DisabledWhenZero(t *testing.T) {
+	p, _ := newTestProxy(t, nil, 0) // disabled
+
+	// Should not panic when cache is disabled.
+	p.cacheACK(42, []byte{0x01, 0x02})
+}
+
+func TestCacheACK_ZeroPacketID(t *testing.T) {
+	p, _ := newTestProxy(t, nil, 100)
+
+	textPayload := buildTextMessagePayloadWithID(t, 0x12345678, 0xFFFFFFFF, 42, "hello")
+	p.cacheTextMessage(textPayload)
+
+	// cacheACK with packetID=0 should do nothing.
+	p.cacheACK(0, []byte{0x01})
+
+	snapshot := p.chatCacheSnapshot()
+	if snapshot[0].ack != nil {
+		t.Error("cacheACK with packetID=0 should not match any entry")
+	}
+}
+
+func TestCacheACK_SnapshotCopiesACK(t *testing.T) {
+	p, _ := newTestProxy(t, nil, 100)
+
+	textPayload := buildTextMessagePayloadWithID(t, 0x12345678, 0xFFFFFFFF, 42, "hello")
+	p.cacheTextMessage(textPayload)
+
+	ackPayload := buildRoutingACKPayload(t, 0xBBBBBBBB, 0x12345678, 200, 42)
+	p.cacheACK(42, ackPayload)
+
+	snapshot1 := p.chatCacheSnapshot()
+	// Mutate the snapshot ACK.
+	snapshot1[0].ack[0] = 0xFF
+
+	// Original cache should not be affected.
+	snapshot2 := p.chatCacheSnapshot()
+	if snapshot2[0].ack[0] == 0xFF {
+		t.Error("chatCacheSnapshot returned ACK reference, not a copy")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// broadcastLoop ACK caching integration tests
+// ---------------------------------------------------------------------------
+
+func TestBroadcastLoop_CachesRoutingACK(t *testing.T) {
+	p, mockNode := newTestProxy(t, nil, 100)
+
+	serverConn, clientConn := newTestConnPair(t)
+	m := metrics.New(10, 300)
+	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client.Start(ctx)
+	p.registerClient(client)
+
+	go p.broadcastLoop(ctx)
+
+	// Send a text message from the node with ID=42.
+	textPayload := buildTextMessagePayloadWithID(t, 0xAAAAAAAA, 0xFFFFFFFF, 42, "hello mesh")
+	mockNode.fromNode <- textPayload
+
+	// Wait for the text message to be received by client (proves broadcastLoop processed it).
+	readFrame(t, serverConn, 2*time.Second)
+
+	// Now send the routing ACK for packet ID 42.
+	ackPayload := buildRoutingACKPayload(t, 0xBBBBBBBB, 0xAAAAAAAA, 200, 42)
+	mockNode.fromNode <- ackPayload
+
+	// Wait for the ACK to be received by client.
+	readFrame(t, serverConn, 2*time.Second)
+
+	// Verify the ACK was associated with the cached text message.
+	snapshot := p.chatCacheSnapshot()
+	if len(snapshot) != 1 {
+		t.Fatalf("cache size = %d, want 1", len(snapshot))
+	}
+	if snapshot[0].ack == nil {
+		t.Fatal("routing ACK was not cached alongside the text message")
+	}
+	if snapshot[0].packetID != 42 {
+		t.Errorf("packetID = %d, want 42", snapshot[0].packetID)
+	}
+}
+
+func TestBroadcastLoop_DoesNotCacheNACK(t *testing.T) {
+	p, mockNode := newTestProxy(t, nil, 100)
+
+	serverConn, clientConn := newTestConnPair(t)
+	m := metrics.New(10, 300)
+	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client.Start(ctx)
+	p.registerClient(client)
+
+	go p.broadcastLoop(ctx)
+
+	// Send a text message from the node.
+	textPayload := buildTextMessagePayloadWithID(t, 0xAAAAAAAA, 0xFFFFFFFF, 42, "nack test")
+	mockNode.fromNode <- textPayload
+	readFrame(t, serverConn, 2*time.Second)
+
+	// Send a NACK (not ACK) for packet ID 42.
+	nackPayload := buildRoutingNACKPayload(t, 0xBBBBBBBB, 0xAAAAAAAA, 200, 42, pb.Routing_NO_RESPONSE)
+	mockNode.fromNode <- nackPayload
+	readFrame(t, serverConn, 2*time.Second)
+
+	// Verify the NACK was NOT cached.
+	snapshot := p.chatCacheSnapshot()
+	if len(snapshot) != 1 {
+		t.Fatalf("cache size = %d, want 1", len(snapshot))
+	}
+	if snapshot[0].ack != nil {
+		t.Error("NACK was cached — only ACKs (ErrorReason=NONE) should be cached")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// replayChatHistory with ACK tests
+// ---------------------------------------------------------------------------
+
+func TestReplayChatHistory_WithACK(t *testing.T) {
+	p, _ := newTestProxy(t, nil, 100)
+
+	// Cache a text message and its ACK.
+	textPayload := buildTextMessagePayloadWithID(t, 0xAAAAAAAA, 0xFFFFFFFF, 42, "acked msg")
+	p.cacheTextMessage(textPayload)
+
+	ackPayload := buildRoutingACKPayload(t, 0xBBBBBBBB, 0xAAAAAAAA, 200, 42)
+	p.cacheACK(42, ackPayload)
+
+	serverConn, clientConn := newTestConnPair(t)
+	m := metrics.New(10, 300)
+	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client.Start(ctx)
+
+	p.replayChatHistory(client)
+
+	// Should receive 2 frames: text message + ACK.
+	frame1 := readFrame(t, serverConn, 2*time.Second)
+	if !isTextMessageFrame(frame1) {
+		t.Error("first replayed frame is not a text message")
+	}
+
+	frame2 := readFrame(t, serverConn, 2*time.Second)
+	packetID, ok := isRoutingACKFrame(frame2)
+	if !ok {
+		t.Fatal("second replayed frame is not a routing ACK")
+	}
+	if packetID != 42 {
+		t.Errorf("ACK requestID = %d, want 42", packetID)
+	}
+}
+
+func TestReplayChatHistory_WithoutACK(t *testing.T) {
+	p, _ := newTestProxy(t, nil, 100)
+
+	// Cache a text message without ACK.
+	textPayload := buildTextMessagePayloadWithID(t, 0xAAAAAAAA, 0xFFFFFFFF, 42, "no ack yet")
+	p.cacheTextMessage(textPayload)
+
+	serverConn, clientConn := newTestConnPair(t)
+	m := metrics.New(10, 300)
+	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client.Start(ctx)
+
+	p.replayChatHistory(client)
+
+	// Should receive only 1 frame: the text message.
+	frame1 := readFrame(t, serverConn, 2*time.Second)
+	if !isTextMessageFrame(frame1) {
+		t.Error("replayed frame is not a text message")
+	}
+
+	// No more frames.
+	_ = serverConn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	_, err := protocol.ReadFrame(serverConn)
+	if err == nil {
+		t.Error("received unexpected second frame — ACK should be nil")
+	}
+}
+
+func TestReplayChatHistory_MixedACKAndNoACK(t *testing.T) {
+	p, _ := newTestProxy(t, nil, 100)
+
+	// Message 1: with ACK.
+	text1 := buildTextMessagePayloadWithID(t, 0xAAAAAAAA, 0xFFFFFFFF, 42, "msg with ack")
+	p.cacheTextMessage(text1)
+	ack1 := buildRoutingACKPayload(t, 0xBBBBBBBB, 0xAAAAAAAA, 200, 42)
+	p.cacheACK(42, ack1)
+
+	// Message 2: without ACK.
+	text2 := buildTextMessagePayloadWithID(t, 0xCCCCCCCC, 0xFFFFFFFF, 43, "msg without ack")
+	p.cacheTextMessage(text2)
+
+	// Message 3: with ACK.
+	text3 := buildTextMessagePayloadWithID(t, 0xDDDDDDDD, 0xFFFFFFFF, 44, "another acked")
+	p.cacheTextMessage(text3)
+	ack3 := buildRoutingACKPayload(t, 0xBBBBBBBB, 0xDDDDDDDD, 300, 44)
+	p.cacheACK(44, ack3)
+
+	serverConn, clientConn := newTestConnPair(t)
+	m := metrics.New(10, 300)
+	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client.Start(ctx)
+
+	p.replayChatHistory(client)
+
+	// Expected frames: text1, ack1, text2, text3, ack3 = 5 frames total.
+	var frames [][]byte
+	for {
+		_ = serverConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		payload, err := protocol.ReadFrame(serverConn)
+		if err != nil {
+			break
+		}
+		frames = append(frames, payload)
+	}
+
+	if len(frames) != 5 {
+		t.Fatalf("got %d frames, want 5 (3 messages + 2 ACKs)", len(frames))
+	}
+
+	// Frame 0: text message 1.
+	if !isTextMessageFrame(frames[0]) {
+		t.Error("frame 0: expected text message")
+	}
+	// Frame 1: ACK for message 1.
+	if _, ok := isRoutingACKFrame(frames[1]); !ok {
+		t.Error("frame 1: expected routing ACK")
+	}
+	// Frame 2: text message 2 (no ACK follows).
+	if !isTextMessageFrame(frames[2]) {
+		t.Error("frame 2: expected text message")
+	}
+	// Frame 3: text message 3.
+	if !isTextMessageFrame(frames[3]) {
+		t.Error("frame 3: expected text message")
+	}
+	// Frame 4: ACK for message 3.
+	if _, ok := isRoutingACKFrame(frames[4]); !ok {
+		t.Error("frame 4: expected routing ACK")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// End-to-end chat replay with ACK integration tests
+// ---------------------------------------------------------------------------
+
+func TestChatReplay_AfterRandomNonce_WithACK(t *testing.T) {
+	// Python CLI scenario: config replay + chat replay with ACK.
+	myNum := uint32(0x12345678)
+	cache := buildTestCache(t, myNum, nil)
+	p, _ := newTestProxy(t, cache, 100)
+
+	// Cache a text message + ACK.
+	chatMsg := buildTextMessagePayloadWithID(t, 0xAAAAAAAA, 0xFFFFFFFF, 42, "hello with ack")
+	p.cacheTextMessage(chatMsg)
+	ackMsg := buildRoutingACKPayload(t, 0xBBBBBBBB, 0xAAAAAAAA, 200, 42)
+	p.cacheACK(42, ackMsg)
+
+	serverConn, clientConn := newTestConnPair(t)
+	m := metrics.New(10, 300)
+	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client.Start(ctx)
+
+	// Random nonce → full config + chat replay.
+	p.replayCachedConfig(client, 12345)
+
+	var frames [][]byte
+	for {
+		_ = serverConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		payload, err := protocol.ReadFrame(serverConn)
+		if err != nil {
+			break
+		}
+		frames = append(frames, payload)
+	}
+
+	// Should have: config frames + 1 chat message + 1 ACK.
+	expectedConfig := len(cache)
+	expectedTotal := expectedConfig + 2 // message + ACK
+	if len(frames) != expectedTotal {
+		t.Fatalf("got %d frames, want %d (config %d + chat 1 + ack 1)", len(frames), expectedTotal, expectedConfig)
+	}
+
+	// Second-to-last frame should be the chat message.
+	chatFrame := frames[len(frames)-2]
+	if !isTextMessageFrame(chatFrame) {
+		t.Error("second-to-last frame is not a text message")
+	}
+
+	// Last frame should be the ACK.
+	ackFrame := frames[len(frames)-1]
+	packetID, ok := isRoutingACKFrame(ackFrame)
+	if !ok {
+		t.Error("last frame is not a routing ACK")
+	}
+	if packetID != 42 {
+		t.Errorf("ACK requestID = %d, want 42", packetID)
+	}
+}
+
+func TestChatReplay_AfterIOSNodesPhase_WithACK(t *testing.T) {
+	// iOS scenario: two-phase config, chat+ACK replayed after second phase.
+	myNum := uint32(0x12345678)
+	cache := buildTestCache(t, myNum, []uint32{0xBBBBBBBB})
+	p, _ := newTestProxy(t, cache, 100)
+
+	// Cache text message + ACK.
+	chatMsg := buildTextMessagePayloadWithID(t, 0xAAAAAAAA, 0xFFFFFFFF, 42, "ios acked chat")
+	p.cacheTextMessage(chatMsg)
+	ackMsg := buildRoutingACKPayload(t, 0xBBBBBBBB, 0xAAAAAAAA, 200, 42)
+	p.cacheACK(42, ackMsg)
+
+	serverConn, clientConn := newTestConnPair(t)
+	m := metrics.New(10, 300)
+	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client.Start(ctx)
+
+	// Phase 1: config-only (69420) — no chat.
+	p.replayCachedConfig(client, nonceOnlyConfig)
+
+	var phase1Frames [][]byte
+	for {
+		_ = serverConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		payload, err := protocol.ReadFrame(serverConn)
+		if err != nil {
+			break
+		}
+		phase1Frames = append(phase1Frames, payload)
+	}
+
+	for _, frame := range phase1Frames {
+		if isTextMessageFrame(frame) {
+			t.Error("chat message replayed during config-only phase")
+		}
+		if _, ok := isRoutingACKFrame(frame); ok {
+			t.Error("routing ACK replayed during config-only phase")
+		}
+	}
+
+	// Phase 2: nodes-only (69421) — should include chat + ACK.
+	p.replayCachedConfig(client, nonceOnlyNodes)
+
+	var phase2Frames [][]byte
+	for {
+		_ = serverConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		payload, err := protocol.ReadFrame(serverConn)
+		if err != nil {
+			break
+		}
+		phase2Frames = append(phase2Frames, payload)
+	}
+
+	foundChat := false
+	foundACK := false
+	for _, frame := range phase2Frames {
+		if isTextMessageFrame(frame) {
+			foundChat = true
+		}
+		if _, ok := isRoutingACKFrame(frame); ok {
+			foundACK = true
+		}
+	}
+	if !foundChat {
+		t.Error("chat message was NOT replayed after nodes-only phase")
+	}
+	if !foundACK {
+		t.Error("routing ACK was NOT replayed after nodes-only phase")
 	}
 }
