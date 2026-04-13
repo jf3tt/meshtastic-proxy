@@ -121,6 +121,12 @@ func (b *Bot) Run(ctx context.Context) error {
 			if !ok {
 				continue
 			}
+			// Only forward incoming messages from the mesh — skip outgoing
+			// messages sent via the web chat or other clients to avoid
+			// duplicates and echo loops.
+			if msg.Direction != "incoming" {
+				continue
+			}
 			// Only forward messages from allowed channels
 			if !b.channels[msg.Channel] {
 				continue

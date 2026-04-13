@@ -1965,12 +1965,15 @@ func TestExtractNodeDirectory_Empty(t *testing.T) {
 	}
 }
 
-func TestExtractNodeDirectory_SkipsNoUser(t *testing.T) {
+func TestExtractNodeDirectory_NoUserPreservesMetadata(t *testing.T) {
 	frames := [][]byte{
 		marshalFromRadio(t, &pb.FromRadio{
 			PayloadVariant: &pb.FromRadio_NodeInfo{
 				NodeInfo: &pb.NodeInfo{
-					Num: 0x11111111,
+					Num:       0x11111111,
+					Snr:       7.5,
+					LastHeard: 12345,
+					HopsAway:  proto.Uint32(2),
 					// No User field
 				},
 			},
@@ -1978,8 +1981,21 @@ func TestExtractNodeDirectory_SkipsNoUser(t *testing.T) {
 	}
 
 	dir := ExtractNodeDirectory(frames)
-	if len(dir) != 0 {
-		t.Fatalf("expected 0 entries (no user), got %d", len(dir))
+	if len(dir) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(dir))
+	}
+	entry := dir[0x11111111]
+	if entry.ShortName != "" {
+		t.Errorf("ShortName = %q, want empty", entry.ShortName)
+	}
+	if entry.Snr != 7.5 {
+		t.Errorf("Snr = %v, want 7.5", entry.Snr)
+	}
+	if entry.LastHeard != 12345 {
+		t.Errorf("LastHeard = %v, want 12345", entry.LastHeard)
+	}
+	if entry.HopsAway != 2 {
+		t.Errorf("HopsAway = %v, want 2", entry.HopsAway)
 	}
 }
 
@@ -3937,6 +3953,68 @@ func TestUpsertCachedNodeInfo_InsertNewWithPublicKey(t *testing.T) {
 		return
 	}
 	t.Error("node 300 not found in cache after insert")
+}
+
+func TestUpsertCachedNodeInfo_MergePreservesIsUnmessagable(t *testing.T) {
+	m := metrics.New(10, 300)
+	c := newTestConnection("127.0.0.1:0", m)
+
+	// Build a cache where node 200 has IsUnmessagable = true.
+	user := &pb.User{
+		ShortName: "N2",
+		LongName:  "Node 200",
+	}
+	user.SetIsUnmessagable(true)
+
+	ni := &pb.NodeInfo{
+		Num:  200,
+		User: user,
+	}
+	var frames [][]byte
+	frames = append(frames, marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_MyInfo{
+			MyInfo: &pb.MyNodeInfo{MyNodeNum: 100},
+		},
+	}))
+	frames = append(frames, marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_NodeInfo{NodeInfo: ni},
+	}))
+	frames = append(frames, marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_ConfigCompleteId{ConfigCompleteId: 99999},
+	}))
+
+	c.configMu.Lock()
+	c.configCache = frames
+	c.configMu.Unlock()
+
+	// Upsert with a broadcast that does NOT include IsUnmessagable.
+	c.UpsertCachedNodeInfo(&NodeInfoData{
+		NodeNum:   200,
+		ShortName: "N2new",
+		// IsUnmessagable is nil — the broadcast didn't include it.
+	})
+
+	got := c.ConfigCache()
+	for _, raw := range got {
+		msg := &pb.FromRadio{}
+		if err := proto.Unmarshal(raw, msg); err != nil {
+			continue
+		}
+		v, ok := msg.GetPayloadVariant().(*pb.FromRadio_NodeInfo)
+		if !ok || v.NodeInfo.GetNum() != 200 {
+			continue
+		}
+		u := v.NodeInfo.GetUser()
+		if u.GetShortName() != "N2new" {
+			t.Errorf("ShortName = %q, want %q", u.GetShortName(), "N2new")
+		}
+		if !u.HasIsUnmessagable() || !u.GetIsUnmessagable() {
+			t.Errorf("IsUnmessagable lost after merge: has=%v, val=%v; want true",
+				u.HasIsUnmessagable(), u.GetIsUnmessagable())
+		}
+		return
+	}
+	t.Error("node 200 not found in cache after upsert")
 }
 
 func TestExtractTraceroute_WithSnr(t *testing.T) {

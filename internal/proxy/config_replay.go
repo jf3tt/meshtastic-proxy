@@ -50,6 +50,11 @@ type filterResult struct {
 // (via onMessage), so the write loop is already running and frames are
 // delivered through the send channel.
 func (p *Proxy) replayCachedConfig(c *Client, clientNonce uint32) {
+	// Serialize concurrent replays for the same client to prevent
+	// interleaved config/nodes frames from two rapid want_config_id requests.
+	c.replayMu.Lock()
+	defer c.replayMu.Unlock()
+
 	frames := p.nodeConn.ConfigCache()
 	if len(frames) == 0 {
 		p.logger.Debug("no cached config for replay", "client", c.Addr())

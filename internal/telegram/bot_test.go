@@ -314,7 +314,8 @@ func TestRun_ForwardsMessages(t *testing.T) {
 		Direction: "incoming",
 	})
 
-	// Publish an outgoing message (should also be forwarded)
+	// Publish an outgoing message (should NOT be forwarded — only incoming
+	// messages are bridged to Telegram to avoid duplicates and echo loops).
 	m.RecordChatMessage(metrics.ChatMessage{
 		From:      0xf9b0552c,
 		FromName:  "jfett",
@@ -335,14 +336,11 @@ func TestRun_ForwardsMessages(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	if len(sentMessages) != 2 {
-		t.Fatalf("expected 2 sent messages, got %d", len(sentMessages))
+	if len(sentMessages) != 1 {
+		t.Fatalf("expected 1 sent message (incoming only), got %d", len(sentMessages))
 	}
 	if !strings.Contains(sentMessages[0].Text, "Hello from mesh!") {
 		t.Errorf("message text = %q, want to contain 'Hello from mesh!'", sentMessages[0].Text)
-	}
-	if !strings.Contains(sentMessages[1].Text, "Outgoing message") {
-		t.Errorf("message text = %q, want to contain 'Outgoing message'", sentMessages[1].Text)
 	}
 }
 

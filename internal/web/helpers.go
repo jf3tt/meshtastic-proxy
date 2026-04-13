@@ -6,6 +6,11 @@ import "net/http"
 // (limited by the MeshPacket data payload size minus protobuf overhead).
 const maxTextPayload = 237
 
+// maxRequestBody limits the size of POST request bodies to prevent
+// memory exhaustion from oversized requests (4 KB is plenty for all
+// JSON payloads used by the API).
+const maxRequestBody = 4096
+
 // jsonOK writes a standard {"ok":true} JSON response.
 func jsonOK(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")

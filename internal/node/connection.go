@@ -200,15 +200,30 @@ func (c *Connection) UpsertCachedNodeInfo(ni *NodeInfoData) {
 	}
 
 	// Not found — insert before the last frame (ConfigCompleteId).
-	// If the cache only has one frame (edge case), just append.
-	if len(c.configCache) <= 1 {
+	if len(c.configCache) == 0 {
 		c.configCache = append(c.configCache, frame)
 		return
 	}
-	insertIdx := len(c.configCache) - 1
-	c.configCache = append(c.configCache, nil)                   // grow by one
-	copy(c.configCache[insertIdx+1:], c.configCache[insertIdx:]) // shift last frame right
-	c.configCache[insertIdx] = frame
+	// Check if the last frame is ConfigCompleteId. If so, insert before it
+	// to ensure the new NodeInfo is delivered to clients during config replay.
+	lastIdx := len(c.configCache) - 1
+	if isConfigCompleteFrame(c.configCache[lastIdx]) {
+		c.configCache = append(c.configCache, nil)               // grow by one
+		copy(c.configCache[lastIdx+1:], c.configCache[lastIdx:]) // shift last frame right
+		c.configCache[lastIdx] = frame
+	} else {
+		c.configCache = append(c.configCache, frame)
+	}
+}
+
+// isConfigCompleteFrame returns true if the raw frame is a FromRadio_ConfigCompleteId.
+func isConfigCompleteFrame(raw []byte) bool {
+	msg := &pb.FromRadio{}
+	if err := proto.Unmarshal(raw, msg); err != nil {
+		return false
+	}
+	_, ok := msg.GetPayloadVariant().(*pb.FromRadio_ConfigCompleteId)
+	return ok
 }
 
 // buildNodeInfoFrame synthesizes a serialized FromRadio_NodeInfo protobuf
@@ -284,9 +299,9 @@ func mergeNodeInfoUser(existingRaw []byte, ni *NodeInfoData) []byte {
 	user.Macaddr = ni.Macaddr //nolint:staticcheck // deprecated but needed for client compat
 	if ni.IsUnmessagable != nil {
 		user.SetIsUnmessagable(*ni.IsUnmessagable)
-	} else {
-		user.ClearIsUnmessagable()
 	}
+	// When IsUnmessagable is nil (broadcast didn't include the field),
+	// preserve whatever value the cached frame already has.
 
 	// Update LastHeard to current time.
 	v.NodeInfo.LastHeard = uint32(time.Now().Unix()) //nolint:gosec // G115: unix timestamp fits uint32 until 2106

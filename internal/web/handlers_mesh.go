@@ -61,6 +61,7 @@ func (s *Server) requireNodeAction(w http.ResponseWriter, r *http.Request) (uint
 	}
 
 	var req nodeActionRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return 0, false

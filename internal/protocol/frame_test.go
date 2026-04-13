@@ -111,13 +111,34 @@ func TestReadFrame(t *testing.T) {
 		{
 			name: "oversized frame skipped, then valid frame",
 			input: func() []byte {
-				// First frame: length > MaxFrameSize (0x02, 0x01 = 513)
+				// First frame: length = 513 (> MaxFrameSize)
 				bad := []byte{0x94, 0xC3, 0x02, 0x01}
+				// Payload of 513 bytes that is discarded
+				bad = append(bad, make([]byte, 513)...)
 				// Then a valid frame
 				good := []byte{0x94, 0xC3, 0x00, 0x01, 0x42}
 				return append(bad, good...)
 			}(),
 			want: []byte{0x42},
+		},
+		{
+			name: "oversized frame with magic bytes inside payload",
+			input: func() []byte {
+				// Oversized frame: length = 514
+				header := []byte{0x94, 0xC3, 0x02, 0x02}
+				payload := make([]byte, 514)
+				// Plant fake magic bytes inside the payload — they must be skipped.
+				payload[10] = 0x94
+				payload[11] = 0xC3
+				payload[12] = 0x00
+				payload[13] = 0x01
+				payload[14] = 0xFF // fake payload byte
+				header = append(header, payload...)
+				// Real valid frame after the oversized one.
+				good := []byte{0x94, 0xC3, 0x00, 0x02, 0xAB, 0xCD}
+				return append(header, good...)
+			}(),
+			want: []byte{0xAB, 0xCD},
 		},
 	}
 

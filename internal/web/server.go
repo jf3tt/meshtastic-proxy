@@ -292,6 +292,7 @@ func (s *Server) handleAPIChatSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req chatSendRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
@@ -368,6 +369,7 @@ func (s *Server) handleAPIFavorite(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req favoriteRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return

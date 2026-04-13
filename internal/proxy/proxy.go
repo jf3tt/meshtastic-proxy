@@ -144,19 +144,6 @@ func (p *Proxy) ClientAddrs() []string {
 }
 
 func (p *Proxy) handleNewConnection(ctx context.Context, conn net.Conn) {
-	p.mu.RLock()
-	count := len(p.clients)
-	p.mu.RUnlock()
-
-	if count >= p.maxClients {
-		p.logger.Warn("max clients reached, rejecting connection",
-			"client", conn.RemoteAddr(),
-			"max", p.maxClients,
-		)
-		_ = conn.Close()
-		return
-	}
-
 	// Create client with callbacks.
 	// Declare client first so the onMessage closure can reference it.
 	var client *Client
@@ -206,7 +193,26 @@ func (p *Proxy) handleNewConnection(ctx context.Context, conn net.Conn) {
 		},
 	)
 
-	p.registerClient(client)
+	// Atomically check max clients and register under the same lock
+	// to prevent TOCTOU races where concurrent accepts exceed the limit.
+	p.mu.Lock()
+	if len(p.clients) >= p.maxClients {
+		p.mu.Unlock()
+		p.logger.Warn("max clients reached, rejecting connection",
+			"client", conn.RemoteAddr(),
+			"max", p.maxClients,
+		)
+		_ = conn.Close()
+		return
+	}
+	p.clients[client] = struct{}{}
+	count := len(p.clients)
+	addrs := p.clientAddrsLocked()
+	p.mu.Unlock()
+
+	p.metrics.ActiveClients.Store(int64(count))
+	p.metrics.PublishClients(addrs)
+	p.logger.Info("client connected", "client", client.Addr(), "total_clients", count)
 
 	// Start the client read/write loops immediately. Config delivery
 	// is deferred until the client sends want_config_id (which all
@@ -291,7 +297,11 @@ func (p *Proxy) broadcastLoop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case payload := <-p.nodeConn.FromNode():
+		case payload, ok := <-p.nodeConn.FromNode():
+			if !ok {
+				p.logger.Info("node channel closed, stopping broadcast loop")
+				return
+			}
 			if isConfigFrame(payload) {
 				p.logger.Debug("suppressing config frame from broadcast",
 					"type", classifyFromRadio(payload),
@@ -318,8 +328,8 @@ func (p *Proxy) broadcastLoop(ctx context.Context) {
 // ConfigCompleteId, Metadata, DeviceuiConfig, FileInfo.
 //
 // Runtime frame types (broadcast normally): Packet, QueueStatus, LogRecord,
-// Rebooted, MqttClientProxyMessage, XModem, FileInfo (also kept as runtime
-// to be safe), and any unknown/unparseable frames.
+// Rebooted, MqttClientProxyMessage, XModem, and any unknown/unparseable
+// frames.
 func isConfigFrame(payload []byte) bool {
 	msg := &pb.FromRadio{}
 	if err := proto.Unmarshal(payload, msg); err != nil {
@@ -334,7 +344,8 @@ func isConfigFrame(payload []byte) bool {
 		*pb.FromRadio_Channel,
 		*pb.FromRadio_ConfigCompleteId,
 		*pb.FromRadio_Metadata,
-		*pb.FromRadio_DeviceuiConfig:
+		*pb.FromRadio_DeviceuiConfig,
+		*pb.FromRadio_FileInfo:
 		return true
 	default:
 		return false

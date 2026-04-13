@@ -50,7 +50,12 @@ func ReadFrame(r io.Reader) ([]byte, error) {
 		length := binary.BigEndian.Uint16(lenBuf)
 
 		if length > MaxFrameSize {
-			// Corrupted frame, skip and rescan
+			// Discard the oversized payload to stay in sync with the stream.
+			// Without this, bytes inside the payload could be misinterpreted
+			// as the start of a new frame header.
+			if _, err := io.ReadFull(r, make([]byte, length)); err != nil {
+				return nil, fmt.Errorf("discarding oversized frame (%d bytes): %w", length, err)
+			}
 			continue
 		}
 

@@ -1756,6 +1756,7 @@ func TestIsConfigFrame_ConfigTypes(t *testing.T) {
 		{PayloadVariant: &pb.FromRadio_ConfigCompleteId{ConfigCompleteId: 99999}},
 		{PayloadVariant: &pb.FromRadio_Metadata{Metadata: &pb.DeviceMetadata{FirmwareVersion: "2.5.0"}}},
 		{PayloadVariant: &pb.FromRadio_DeviceuiConfig{}},
+		{PayloadVariant: &pb.FromRadio_FileInfo{FileInfo: &pb.FileInfo{FileName: "test.bin"}}},
 	}
 
 	for _, msg := range configFrames {

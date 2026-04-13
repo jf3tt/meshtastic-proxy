@@ -60,6 +60,11 @@ type Client struct {
 	// Bit 1 (2): seen nonce 69421 (nodes-only phase).
 	// Used to determine when to replay chat history for iOS clients.
 	configPhase atomic.Uint32
+
+	// replayMu serializes concurrent replayCachedConfig calls.
+	// Prevents interleaved config frames if a client sends two
+	// want_config_id requests before the first replay completes.
+	replayMu sync.Mutex
 }
 
 // NewClient creates a new client handler.

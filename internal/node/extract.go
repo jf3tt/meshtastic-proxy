@@ -328,23 +328,21 @@ func ExtractNodeDirectory(frames [][]byte) map[uint32]metrics.NodeEntry {
 			continue
 		}
 		u := ni.NodeInfo.GetUser()
-		if u == nil {
-			continue
-		}
 		entry := metrics.NodeEntry{
-			ShortName:  u.GetShortName(),
-			LongName:   u.GetLongName(),
-			UserID:     u.GetId(),
-			HwModel:    u.GetHwModel().String(),
-			Role:       u.GetRole().String(),
-			IsLicensed: u.GetIsLicensed(),
-
 			Snr:        ni.NodeInfo.GetSnr(),
 			LastHeard:  ni.NodeInfo.GetLastHeard(),
 			HopsAway:   ni.NodeInfo.GetHopsAway(),
 			ViaMqtt:    ni.NodeInfo.GetViaMqtt(),
 			IsFavorite: ni.NodeInfo.GetIsFavorite(),
 			Channel:    ni.NodeInfo.GetChannel(),
+		}
+		if u != nil {
+			entry.ShortName = u.GetShortName()
+			entry.LongName = u.GetLongName()
+			entry.UserID = u.GetId()
+			entry.HwModel = u.GetHwModel().String()
+			entry.Role = u.GetRole().String()
+			entry.IsLicensed = u.GetIsLicensed()
 		}
 
 		// Position from NodeInfo
