@@ -77,13 +77,16 @@ type NodeSignal struct {
 // and sends a NODEINFO_APP broadcast, the proxy can add it to the node directory
 // without waiting for a full config re-request.
 type NodeInfoData struct {
-	NodeNum    uint32
-	ShortName  string
-	LongName   string
-	UserID     string
-	HwModel    string
-	Role       string
-	IsLicensed bool
+	NodeNum        uint32
+	ShortName      string
+	LongName       string
+	UserID         string
+	HwModel        string
+	Role           string
+	IsLicensed     bool
+	PublicKey      []byte // PKI public key for computing shared secrets
+	Macaddr        []byte // deprecated but preserved for pass-through fidelity
+	IsUnmessagable *bool  // nil = not set in protobuf (proto3 optional)
 }
 
 // TracerouteData holds the route discovered by a TRACEROUTE_APP response.
@@ -222,7 +225,7 @@ func ExtractNodeInfo(payload []byte) *NodeInfoData {
 	if from == 0 {
 		return nil
 	}
-	return &NodeInfoData{
+	result := &NodeInfoData{
 		NodeNum:    from,
 		ShortName:  user.GetShortName(),
 		LongName:   user.GetLongName(),
@@ -230,7 +233,14 @@ func ExtractNodeInfo(payload []byte) *NodeInfoData {
 		HwModel:    user.GetHwModel().String(),
 		Role:       user.GetRole().String(),
 		IsLicensed: user.GetIsLicensed(),
+		PublicKey:  user.GetPublicKey(),
+		Macaddr:    user.GetMacaddr(), //nolint:staticcheck // deprecated but needed for client compat
 	}
+	if user.HasIsUnmessagable() {
+		v := user.GetIsUnmessagable()
+		result.IsUnmessagable = &v
+	}
+	return result
 }
 
 // ExtractTraceroute tries to extract a traceroute response from a FromRadio

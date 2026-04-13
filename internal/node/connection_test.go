@@ -1,6 +1,7 @@
 package node
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -1767,6 +1768,125 @@ func TestCopyBytes_Nil(t *testing.T) {
 // ExtractNodeDirectory tests
 // ---------------------------------------------------------------------------
 
+// ExtractNodeInfo tests
+// ---------------------------------------------------------------------------
+
+func TestExtractNodeInfo_WithPublicKey(t *testing.T) {
+	pubKey := []byte{0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04}
+	macAddr := []byte{0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF}
+	unmessagable := true
+
+	user := &pb.User{
+		Id:         "!00000064",
+		ShortName:  "PK",
+		LongName:   "PubKey Node",
+		HwModel:    pb.HardwareModel_TBEAM,
+		Role:       pb.Config_DeviceConfig_ROUTER,
+		IsLicensed: true,
+		PublicKey:  pubKey,
+		Macaddr:    macAddr,
+	}
+	user.SetIsUnmessagable(unmessagable)
+
+	userData, err := proto.Marshal(user)
+	if err != nil {
+		t.Fatalf("marshal User: %v", err)
+	}
+
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From: 100,
+				To:   0xFFFFFFFF,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum: pb.PortNum_NODEINFO_APP,
+						Payload: userData,
+					},
+				},
+			},
+		},
+	})
+
+	ni := ExtractNodeInfo(payload)
+	if ni == nil {
+		t.Fatal("ExtractNodeInfo returned nil")
+	}
+
+	if ni.NodeNum != 100 {
+		t.Errorf("NodeNum = %d, want 100", ni.NodeNum)
+	}
+	if ni.ShortName != "PK" {
+		t.Errorf("ShortName = %q, want %q", ni.ShortName, "PK")
+	}
+	if ni.LongName != "PubKey Node" {
+		t.Errorf("LongName = %q, want %q", ni.LongName, "PubKey Node")
+	}
+	if !bytes.Equal(ni.PublicKey, pubKey) {
+		t.Errorf("PublicKey = %x, want %x", ni.PublicKey, pubKey)
+	}
+	if !bytes.Equal(ni.Macaddr, macAddr) {
+		t.Errorf("Macaddr = %x, want %x", ni.Macaddr, macAddr)
+	}
+	if ni.IsUnmessagable == nil || !*ni.IsUnmessagable {
+		t.Errorf("IsUnmessagable = %v, want true", ni.IsUnmessagable)
+	}
+	if ni.HwModel != "TBEAM" {
+		t.Errorf("HwModel = %q, want %q", ni.HwModel, "TBEAM")
+	}
+	if ni.Role != "ROUTER" {
+		t.Errorf("Role = %q, want %q", ni.Role, "ROUTER")
+	}
+	if !ni.IsLicensed {
+		t.Error("IsLicensed = false, want true")
+	}
+}
+
+func TestExtractNodeInfo_NilPublicKey(t *testing.T) {
+	// Node without public key — IsUnmessagable not set.
+	user := &pb.User{
+		Id:        "!000000c8",
+		ShortName: "NP",
+		LongName:  "No PubKey",
+	}
+
+	userData, err := proto.Marshal(user)
+	if err != nil {
+		t.Fatalf("marshal User: %v", err)
+	}
+
+	payload := marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_Packet{
+			Packet: &pb.MeshPacket{
+				From: 200,
+				To:   0xFFFFFFFF,
+				PayloadVariant: &pb.MeshPacket_Decoded{
+					Decoded: &pb.Data{
+						Portnum: pb.PortNum_NODEINFO_APP,
+						Payload: userData,
+					},
+				},
+			},
+		},
+	})
+
+	ni := ExtractNodeInfo(payload)
+	if ni == nil {
+		t.Fatal("ExtractNodeInfo returned nil")
+	}
+
+	if ni.PublicKey != nil {
+		t.Errorf("PublicKey = %x, want nil", ni.PublicKey)
+	}
+	if ni.IsUnmessagable != nil {
+		t.Errorf("IsUnmessagable = %v, want nil (not set)", ni.IsUnmessagable)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ExtractNodeDirectory tests
+// ---------------------------------------------------------------------------
+
 func TestExtractNodeDirectory(t *testing.T) {
 	frames := [][]byte{
 		marshalFromRadio(t, &pb.FromRadio{
@@ -3456,14 +3576,18 @@ func TestUpsertCachedNodeInfo_MultipleInserts(t *testing.T) {
 }
 
 func TestBuildNodeInfoFrame_ProducesValidProtobuf(t *testing.T) {
+	unmessagable := true
 	ni := &NodeInfoData{
-		NodeNum:    42,
-		ShortName:  "TN",
-		LongName:   "Test Node",
-		UserID:     "!0000002a",
-		HwModel:    "TBEAM",
-		Role:       "CLIENT",
-		IsLicensed: true,
+		NodeNum:        42,
+		ShortName:      "TN",
+		LongName:       "Test Node",
+		UserID:         "!0000002a",
+		HwModel:        "TBEAM",
+		Role:           "CLIENT",
+		IsLicensed:     true,
+		PublicKey:      []byte{0xDE, 0xAD, 0xBE, 0xEF},
+		Macaddr:        []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06},
+		IsUnmessagable: &unmessagable,
 	}
 
 	frame := buildNodeInfoFrame(ni)
@@ -3505,9 +3629,314 @@ func TestBuildNodeInfoFrame_ProducesValidProtobuf(t *testing.T) {
 	if !u.GetIsLicensed() {
 		t.Error("IsLicensed = false, want true")
 	}
+	if !bytes.Equal(u.GetPublicKey(), []byte{0xDE, 0xAD, 0xBE, 0xEF}) {
+		t.Errorf("PublicKey = %x, want deadbeef", u.GetPublicKey())
+	}
+	if !bytes.Equal(u.GetMacaddr(), []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06}) { //nolint:staticcheck // deprecated but tested for compat
+		t.Errorf("Macaddr = %x, want 010203040506", u.GetMacaddr()) //nolint:staticcheck // deprecated but tested for compat
+	}
+	if !u.HasIsUnmessagable() || !u.GetIsUnmessagable() {
+		t.Errorf("IsUnmessagable = %v (has=%v), want true", u.GetIsUnmessagable(), u.HasIsUnmessagable())
+	}
 	if v.NodeInfo.GetLastHeard() == 0 {
 		t.Error("LastHeard = 0, want non-zero")
 	}
+}
+
+// buildRichCache builds a config cache with NodeInfo frames that include
+// Position, DeviceMetrics, PublicKey, and other fields that are typically
+// present in the initial config from the node but absent in NODEINFO_APP
+// broadcasts. Used to test that UpsertCachedNodeInfo merge preserves them.
+func buildRichCache(t *testing.T, myNum uint32, nodes ...struct {
+	Num       uint32
+	ShortName string
+	PublicKey []byte
+	Lat, Lon  int32
+	Battery   uint32
+}) [][]byte {
+	t.Helper()
+	var frames [][]byte
+
+	frames = append(frames, marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_MyInfo{
+			MyInfo: &pb.MyNodeInfo{MyNodeNum: myNum},
+		},
+	}))
+
+	for _, n := range nodes {
+		ni := &pb.NodeInfo{
+			Num: n.Num,
+			User: &pb.User{
+				ShortName: n.ShortName,
+				LongName:  fmt.Sprintf("Node %d", n.Num),
+				PublicKey: n.PublicKey,
+			},
+			Snr:       5.5,
+			LastHeard: 1000,
+			Channel:   1,
+		}
+		if n.Lat != 0 || n.Lon != 0 {
+			ni.Position = &pb.Position{
+				LatitudeI:  &n.Lat,
+				LongitudeI: &n.Lon,
+				Altitude:   proto.Int32(100),
+			}
+		}
+		if n.Battery != 0 {
+			ni.DeviceMetrics = &pb.DeviceMetrics{
+				BatteryLevel: &n.Battery,
+			}
+		}
+		frames = append(frames, marshalFromRadio(t, &pb.FromRadio{
+			PayloadVariant: &pb.FromRadio_NodeInfo{NodeInfo: ni},
+		}))
+	}
+
+	frames = append(frames, marshalFromRadio(t, &pb.FromRadio{
+		PayloadVariant: &pb.FromRadio_ConfigCompleteId{ConfigCompleteId: 99999},
+	}))
+
+	return frames
+}
+
+func TestUpsertCachedNodeInfo_MergePreservesPosition(t *testing.T) {
+	m := metrics.New(10, 300)
+	c := newTestConnection("127.0.0.1:0", m)
+
+	lat := int32(554000000) // ~55.4°N
+	lon := int32(373000000) // ~37.3°E
+	cache := buildRichCache(t, 100,
+		struct {
+			Num       uint32
+			ShortName string
+			PublicKey []byte
+			Lat, Lon  int32
+			Battery   uint32
+		}{Num: 200, ShortName: "N2", Lat: lat, Lon: lon, Battery: 75},
+	)
+	c.configMu.Lock()
+	c.configCache = cache
+	c.configMu.Unlock()
+
+	// Update node 200 with a new name — Position should be preserved.
+	c.UpsertCachedNodeInfo(&NodeInfoData{
+		NodeNum:   200,
+		ShortName: "XX",
+		LongName:  "Updated Node",
+		HwModel:   "HELTEC_V3",
+	})
+
+	got := c.ConfigCache()
+	for _, raw := range got {
+		msg := &pb.FromRadio{}
+		if err := proto.Unmarshal(raw, msg); err != nil {
+			continue
+		}
+		v, ok := msg.GetPayloadVariant().(*pb.FromRadio_NodeInfo)
+		if !ok || v.NodeInfo.GetNum() != 200 {
+			continue
+		}
+		// User fields should be updated.
+		if v.NodeInfo.GetUser().GetShortName() != "XX" {
+			t.Errorf("ShortName = %q, want %q", v.NodeInfo.GetUser().GetShortName(), "XX")
+		}
+		// Position should be preserved from the original frame.
+		pos := v.NodeInfo.GetPosition()
+		if pos == nil {
+			t.Fatal("Position is nil after merge — should be preserved")
+		}
+		if pos.GetLatitudeI() != lat {
+			t.Errorf("LatitudeI = %d, want %d", pos.GetLatitudeI(), lat)
+		}
+		if pos.GetLongitudeI() != lon {
+			t.Errorf("LongitudeI = %d, want %d", pos.GetLongitudeI(), lon)
+		}
+		return
+	}
+	t.Error("node 200 not found in cache after merge")
+}
+
+func TestUpsertCachedNodeInfo_MergePreservesDeviceMetrics(t *testing.T) {
+	m := metrics.New(10, 300)
+	c := newTestConnection("127.0.0.1:0", m)
+
+	cache := buildRichCache(t, 100,
+		struct {
+			Num       uint32
+			ShortName string
+			PublicKey []byte
+			Lat, Lon  int32
+			Battery   uint32
+		}{Num: 200, ShortName: "N2", Battery: 85},
+	)
+	c.configMu.Lock()
+	c.configCache = cache
+	c.configMu.Unlock()
+
+	c.UpsertCachedNodeInfo(&NodeInfoData{
+		NodeNum:   200,
+		ShortName: "YY",
+	})
+
+	got := c.ConfigCache()
+	for _, raw := range got {
+		msg := &pb.FromRadio{}
+		if err := proto.Unmarshal(raw, msg); err != nil {
+			continue
+		}
+		v, ok := msg.GetPayloadVariant().(*pb.FromRadio_NodeInfo)
+		if !ok || v.NodeInfo.GetNum() != 200 {
+			continue
+		}
+		if v.NodeInfo.GetUser().GetShortName() != "YY" {
+			t.Errorf("ShortName = %q, want %q", v.NodeInfo.GetUser().GetShortName(), "YY")
+		}
+		dm := v.NodeInfo.GetDeviceMetrics()
+		if dm == nil {
+			t.Fatal("DeviceMetrics is nil after merge — should be preserved")
+		}
+		if dm.GetBatteryLevel() != 85 {
+			t.Errorf("BatteryLevel = %d, want 85", dm.GetBatteryLevel())
+		}
+		return
+	}
+	t.Error("node 200 not found in cache after merge")
+}
+
+func TestUpsertCachedNodeInfo_MergePreservesSnr(t *testing.T) {
+	m := metrics.New(10, 300)
+	c := newTestConnection("127.0.0.1:0", m)
+
+	cache := buildRichCache(t, 100,
+		struct {
+			Num       uint32
+			ShortName string
+			PublicKey []byte
+			Lat, Lon  int32
+			Battery   uint32
+		}{Num: 200, ShortName: "N2"},
+	)
+	c.configMu.Lock()
+	c.configCache = cache
+	c.configMu.Unlock()
+
+	c.UpsertCachedNodeInfo(&NodeInfoData{
+		NodeNum:   200,
+		ShortName: "ZZ",
+	})
+
+	got := c.ConfigCache()
+	for _, raw := range got {
+		msg := &pb.FromRadio{}
+		if err := proto.Unmarshal(raw, msg); err != nil {
+			continue
+		}
+		v, ok := msg.GetPayloadVariant().(*pb.FromRadio_NodeInfo)
+		if !ok || v.NodeInfo.GetNum() != 200 {
+			continue
+		}
+		if v.NodeInfo.GetSnr() != 5.5 {
+			t.Errorf("Snr = %f, want 5.5", v.NodeInfo.GetSnr())
+		}
+		if v.NodeInfo.GetChannel() != 1 {
+			t.Errorf("Channel = %d, want 1", v.NodeInfo.GetChannel())
+		}
+		return
+	}
+	t.Error("node 200 not found in cache after merge")
+}
+
+func TestUpsertCachedNodeInfo_MergeUpdatesPublicKey(t *testing.T) {
+	m := metrics.New(10, 300)
+	c := newTestConnection("127.0.0.1:0", m)
+
+	origKey := []byte{0x01, 0x02, 0x03, 0x04}
+	cache := buildRichCache(t, 100,
+		struct {
+			Num       uint32
+			ShortName string
+			PublicKey []byte
+			Lat, Lon  int32
+			Battery   uint32
+		}{Num: 200, ShortName: "N2", PublicKey: origKey},
+	)
+	c.configMu.Lock()
+	c.configCache = cache
+	c.configMu.Unlock()
+
+	// Verify original key is in cache.
+	for _, raw := range c.ConfigCache() {
+		msg := &pb.FromRadio{}
+		if err := proto.Unmarshal(raw, msg); err != nil {
+			continue
+		}
+		v, ok := msg.GetPayloadVariant().(*pb.FromRadio_NodeInfo)
+		if !ok || v.NodeInfo.GetNum() != 200 {
+			continue
+		}
+		if !bytes.Equal(v.NodeInfo.GetUser().GetPublicKey(), origKey) {
+			t.Fatalf("original PublicKey = %x, want %x", v.NodeInfo.GetUser().GetPublicKey(), origKey)
+		}
+	}
+
+	// Upsert with a new key — the new key from the broadcast should replace the old one.
+	newKey := []byte{0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE}
+	c.UpsertCachedNodeInfo(&NodeInfoData{
+		NodeNum:   200,
+		ShortName: "N2",
+		PublicKey: newKey,
+	})
+
+	got := c.ConfigCache()
+	for _, raw := range got {
+		msg := &pb.FromRadio{}
+		if err := proto.Unmarshal(raw, msg); err != nil {
+			continue
+		}
+		v, ok := msg.GetPayloadVariant().(*pb.FromRadio_NodeInfo)
+		if !ok || v.NodeInfo.GetNum() != 200 {
+			continue
+		}
+		if !bytes.Equal(v.NodeInfo.GetUser().GetPublicKey(), newKey) {
+			t.Errorf("PublicKey after upsert = %x, want %x", v.NodeInfo.GetUser().GetPublicKey(), newKey)
+		}
+		return
+	}
+	t.Error("node 200 not found in cache after upsert")
+}
+
+func TestUpsertCachedNodeInfo_InsertNewWithPublicKey(t *testing.T) {
+	m := metrics.New(10, 300)
+	c := newTestConnection("127.0.0.1:0", m)
+
+	cache := buildMinimalCache(t, 100, 100)
+	c.configMu.Lock()
+	c.configCache = cache
+	c.configMu.Unlock()
+
+	pubKey := []byte{0xAA, 0xBB, 0xCC, 0xDD}
+	c.UpsertCachedNodeInfo(&NodeInfoData{
+		NodeNum:   300,
+		ShortName: "PK",
+		PublicKey: pubKey,
+	})
+
+	got := c.ConfigCache()
+	for _, raw := range got {
+		msg := &pb.FromRadio{}
+		if err := proto.Unmarshal(raw, msg); err != nil {
+			continue
+		}
+		v, ok := msg.GetPayloadVariant().(*pb.FromRadio_NodeInfo)
+		if !ok || v.NodeInfo.GetNum() != 300 {
+			continue
+		}
+		if !bytes.Equal(v.NodeInfo.GetUser().GetPublicKey(), pubKey) {
+			t.Errorf("PublicKey = %x, want %x", v.NodeInfo.GetUser().GetPublicKey(), pubKey)
+		}
+		return
+	}
+	t.Error("node 300 not found in cache after insert")
 }
 
 func TestExtractTraceroute_WithSnr(t *testing.T) {

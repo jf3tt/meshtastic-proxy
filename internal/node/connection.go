@@ -186,8 +186,15 @@ func (c *Connection) UpsertCachedNodeInfo(ni *NodeInfoData) {
 			continue
 		}
 		if v.NodeInfo.GetNum() == ni.NodeNum {
-			// Replace existing frame in-place.
-			c.configCache[i] = frame
+			// Merge User fields into the existing frame, preserving
+			// Position, DeviceMetrics, Snr, and other NodeInfo fields
+			// that are not available in a NODEINFO_APP broadcast.
+			if merged := mergeNodeInfoUser(raw, ni); merged != nil {
+				c.configCache[i] = merged
+			} else {
+				// Fallback to synthesized frame if merge fails.
+				c.configCache[i] = frame
+			}
 			return
 		}
 	}
@@ -212,22 +219,77 @@ func buildNodeInfoFrame(ni *NodeInfoData) []byte {
 
 	now := uint32(time.Now().Unix()) //nolint:gosec // G115: unix timestamp fits uint32 until 2106
 
+	user := &pb.User{
+		Id:         ni.UserID,
+		ShortName:  ni.ShortName,
+		LongName:   ni.LongName,
+		HwModel:    hwModel,
+		Role:       role,
+		IsLicensed: ni.IsLicensed,
+		PublicKey:  ni.PublicKey,
+		Macaddr:    ni.Macaddr,
+	}
+	if ni.IsUnmessagable != nil {
+		user.SetIsUnmessagable(*ni.IsUnmessagable)
+	}
+
 	msg := &pb.FromRadio{
 		PayloadVariant: &pb.FromRadio_NodeInfo{
 			NodeInfo: &pb.NodeInfo{
-				Num: ni.NodeNum,
-				User: &pb.User{
-					Id:         ni.UserID,
-					ShortName:  ni.ShortName,
-					LongName:   ni.LongName,
-					HwModel:    hwModel,
-					Role:       role,
-					IsLicensed: ni.IsLicensed,
-				},
+				Num:       ni.NodeNum,
+				User:      user,
 				LastHeard: now,
 			},
 		},
 	}
+
+	raw, err := proto.Marshal(msg)
+	if err != nil {
+		return nil
+	}
+	return raw
+}
+
+// mergeNodeInfoUser updates the User fields in an existing serialized
+// FromRadio_NodeInfo frame with data from a NODEINFO_APP broadcast, while
+// preserving all other NodeInfo fields (Position, DeviceMetrics, Snr,
+// HopsAway, ViaMqtt, IsFavorite, Channel, etc.) that are not present in
+// the broadcast. Returns the re-serialized frame, or nil on failure.
+func mergeNodeInfoUser(existingRaw []byte, ni *NodeInfoData) []byte {
+	msg := &pb.FromRadio{}
+	if err := proto.Unmarshal(existingRaw, msg); err != nil {
+		return nil
+	}
+	v, ok := msg.GetPayloadVariant().(*pb.FromRadio_NodeInfo)
+	if !ok || v.NodeInfo == nil {
+		return nil
+	}
+
+	hwModel := pb.HardwareModel(pb.HardwareModel_value[ni.HwModel])
+	role := pb.Config_DeviceConfig_Role(pb.Config_DeviceConfig_Role_value[ni.Role])
+
+	// Update User fields while preserving the rest of NodeInfo.
+	user := v.NodeInfo.User
+	if user == nil {
+		user = &pb.User{}
+		v.NodeInfo.User = user
+	}
+	user.Id = ni.UserID
+	user.ShortName = ni.ShortName
+	user.LongName = ni.LongName
+	user.HwModel = hwModel
+	user.Role = role
+	user.IsLicensed = ni.IsLicensed
+	user.PublicKey = ni.PublicKey
+	user.Macaddr = ni.Macaddr //nolint:staticcheck // deprecated but needed for client compat
+	if ni.IsUnmessagable != nil {
+		user.SetIsUnmessagable(*ni.IsUnmessagable)
+	} else {
+		user.ClearIsUnmessagable()
+	}
+
+	// Update LastHeard to current time.
+	v.NodeInfo.LastHeard = uint32(time.Now().Unix()) //nolint:gosec // G115: unix timestamp fits uint32 until 2106
 
 	raw, err := proto.Marshal(msg)
 	if err != nil {
