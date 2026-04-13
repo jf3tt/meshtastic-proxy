@@ -107,6 +107,7 @@ func main() {
 				nodeConn.ConfigCache,
 				nodeConn.MyNodeNum,
 			),
+			web.WithConfigRefresh(nodeConn.RequestConfigRefresh),
 		)
 		go func() {
 			errCh <- webServer.Run(ctx)

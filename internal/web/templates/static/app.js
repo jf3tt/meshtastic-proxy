@@ -1400,4 +1400,27 @@
         applyMapFilters();
         updateHeatmap();
     });
+
+    // ── Config Cache Refresh Button ──
+    var refreshBtn = document.getElementById('btn-refresh-config');
+    if (refreshBtn) {
+        refreshBtn.addEventListener('click', function() {
+            refreshBtn.disabled = true;
+            refreshBtn.classList.add('animate-spin');
+            fetch('/api/config/refresh', { method: 'POST' })
+                .then(function(r) {
+                    if (!r.ok) throw new Error('refresh failed: ' + r.status);
+                })
+                .catch(function(err) {
+                    console.error('config refresh error:', err);
+                })
+                .finally(function() {
+                    // Keep spinning for 2s to give the node time to respond
+                    setTimeout(function() {
+                        refreshBtn.disabled = false;
+                        refreshBtn.classList.remove('animate-spin');
+                    }, 2000);
+                });
+        });
+    }
 })();

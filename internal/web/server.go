@@ -33,20 +33,29 @@ func WithChatSupport(sendToNodeFn func([]byte), configCacheFn func() [][]byte, m
 	}
 }
 
+// WithConfigRefresh configures the server with config cache refresh capability.
+// refreshConfigFn triggers a re-request of the node configuration.
+func WithConfigRefresh(refreshConfigFn func()) ServerOption {
+	return func(s *Server) {
+		s.refreshConfigFn = refreshConfigFn
+	}
+}
+
 //go:embed templates/*.html templates/static/*
 var templateFS embed.FS
 
 // Server provides an HTTP dashboard and API for monitoring the proxy.
 type Server struct {
-	listenAddr    string
-	metrics       *metrics.Metrics
-	logger        *slog.Logger
-	clientsFn     func() []string // returns connected client addresses
-	sendToNodeFn  func(payload []byte)
-	configCacheFn func() [][]byte
-	myNodeNumFn   func() uint32
-	templates     *template.Template
-	promHandler   http.Handler // Prometheus metrics handler (nil = disabled)
+	listenAddr      string
+	metrics         *metrics.Metrics
+	logger          *slog.Logger
+	clientsFn       func() []string // returns connected client addresses
+	sendToNodeFn    func(payload []byte)
+	configCacheFn   func() [][]byte
+	myNodeNumFn     func() uint32
+	refreshConfigFn func()
+	templates       *template.Template
+	promHandler     http.Handler // Prometheus metrics handler (nil = disabled)
 }
 
 // NewServer creates a new web server.
@@ -156,6 +165,7 @@ func (s *Server) buildMux() *http.ServeMux {
 	mux.HandleFunc("/api/request-nodeinfo", s.handleAPIRequestNodeInfo)
 	mux.HandleFunc("/api/store-forward", s.handleAPIStoreForward)
 	mux.HandleFunc("/api/favorite", s.handleAPIFavorite)
+	mux.HandleFunc("/api/config/refresh", s.handleAPIConfigRefresh)
 
 	// Prometheus metrics endpoint
 	if s.promHandler != nil {
@@ -386,6 +396,27 @@ func (s *Server) handleAPIFavorite(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonOK(w)
+}
+
+// handleAPIConfigRefresh triggers a re-request of the node configuration,
+// causing the config cache to be refreshed. The response is 202 Accepted
+// because the actual cache update happens asynchronously when the node replies.
+func (s *Server) handleAPIConfigRefresh(w http.ResponseWriter, r *http.Request) {
+	if !requirePost(w, r) {
+		return
+	}
+
+	if s.refreshConfigFn == nil {
+		http.Error(w, "config refresh not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	s.refreshConfigFn()
+	s.logger.Info("config cache refresh requested via API")
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_, _ = w.Write([]byte(`{"ok":true,"message":"config refresh requested"}` + "\n"))
 }
 
 type channelInfo struct {

@@ -714,6 +714,14 @@ func (c *Connection) sendPostConfigHeartbeat() {
 	c.logger.Debug("post-config heartbeat sent to node")
 }
 
+// RequestConfigRefresh re-requests the full configuration from the node,
+// causing the config cache to be replaced once the node responds.
+// This is safe to call from any goroutine — the readLoop will collect
+// the new config sequence and atomically swap the cache.
+func (c *Connection) RequestConfigRefresh() {
+	c.requestConfig()
+}
+
 func (c *Connection) requestConfig() {
 	nonce := uint32(time.Now().UnixNano() & 0xFFFFFFFF)
 	toRadio := &pb.ToRadio{
