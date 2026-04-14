@@ -39,6 +39,7 @@ type ProxyConfig struct {
 	ClientIdleTimeout Duration `toml:"client_idle_timeout"`
 	IOSNodeInfoDelay  Duration `toml:"ios_nodeinfo_delay"`
 	MaxChatCache      int      `toml:"max_chat_cache"`
+	ReplayChatHistory bool     `toml:"replay_chat_history"`
 }
 
 // MetricsConfig holds settings for the metrics collector.
@@ -119,6 +120,7 @@ func DefaultConfig() *Config {
 			ClientIdleTimeout: Duration{30 * time.Minute},
 			IOSNodeInfoDelay:  Duration{50 * time.Millisecond},
 			MaxChatCache:      1000,
+			ReplayChatHistory: true,
 		},
 		Web: WebConfig{
 			Listen:  ":8080",

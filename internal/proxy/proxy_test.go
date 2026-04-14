@@ -2007,14 +2007,15 @@ func newTestProxy(t *testing.T, cache [][]byte, maxChatCache int) (*Proxy, *mock
 	mockNode.myNodeNum = 0x12345678
 	m := metrics.New(10, 300)
 	p := New(Options{
-		ListenAddr:       ":0",
-		MaxClients:       10,
-		ClientSendBuffer: 256,
-		IOSNodeInfoDelay: 0, // no delay for tests
-		MaxChatCache:     maxChatCache,
-		NodeConn:         mockNode,
-		Metrics:          m,
-		Logger:           slog.Default(),
+		ListenAddr:        ":0",
+		MaxClients:        10,
+		ClientSendBuffer:  256,
+		IOSNodeInfoDelay:  0, // no delay for tests
+		MaxChatCache:      maxChatCache,
+		ReplayChatHistory: true,
+		NodeConn:          mockNode,
+		Metrics:           m,
+		Logger:            slog.Default(),
 	})
 	return p, mockNode
 }
@@ -2314,6 +2315,23 @@ func TestShouldReplayChat_Disabled(t *testing.T) {
 
 	if p.shouldReplayChat(12345, client) {
 		t.Error("shouldReplayChat should return false when maxChatCache=0")
+	}
+}
+
+func TestShouldReplayChat_ReplayDisabledByConfig(t *testing.T) {
+	p, _ := newTestProxy(t, nil, 100)
+	p.replayChatEnabled = false // explicitly disabled via config
+	m := metrics.New(10, 300)
+	_, clientConn := newTestConnPair(t)
+	client := NewClient(clientConn, slog.Default(), m, 256, 0, func([]byte) {}, func(*Client) {})
+
+	if p.shouldReplayChat(12345, client) {
+		t.Error("shouldReplayChat should return false when replay_chat_history is disabled")
+	}
+	// iOS nodes-only phase should also be suppressed.
+	client.configPhase.Or(configPhaseConfig)
+	if p.shouldReplayChat(nonceOnlyNodes, client) {
+		t.Error("shouldReplayChat should return false for iOS nodes-only when replay_chat_history is disabled")
 	}
 }
 

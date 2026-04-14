@@ -24,6 +24,7 @@ data:
     client_idle_timeout = "30m"
     ios_nodeinfo_delay = "50ms"
     max_chat_cache = 1000
+    replay_chat_history = false
 
     [web]
     listen = "0.0.0.0:8090"

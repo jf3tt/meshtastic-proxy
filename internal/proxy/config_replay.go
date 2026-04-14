@@ -278,7 +278,7 @@ func filterConfigCache(frames [][]byte, nonce uint32) filterResult {
 //   - Nonce 69420 (iOS config-only, first phase): do NOT replay — wait for second phase.
 //   - Nonce 69421 (iOS nodes-only, second phase): replay — both phases complete.
 func (p *Proxy) shouldReplayChat(nonce uint32, c *Client) bool {
-	if p.maxChatCache <= 0 {
+	if !p.replayChatEnabled || p.maxChatCache <= 0 {
 		return false
 	}
 

@@ -56,6 +56,11 @@ ios_nodeinfo_delay = "50ms"
 # (sent by clients through proxy) messages are cached. Set to 0 to disable.
 max_chat_cache = 1000
 
+# Replay cached chat messages to newly connected clients after config delivery.
+# When false, messages are still cached (for Telegram, web dashboard, etc.)
+# but not sent to clients on connect. Default: true.
+replay_chat_history = false
+
 [web]
 # Address to listen for the web dashboard
 listen = ":8080"

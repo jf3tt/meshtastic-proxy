@@ -33,6 +33,7 @@ type Proxy struct {
 	clientIdleTimeout time.Duration
 	iosNodeInfoDelay  time.Duration
 	maxChatCache      int
+	replayChatEnabled bool
 	nodeConn          NodeConnection
 	metrics           *metrics.Metrics
 	logger            *slog.Logger
@@ -62,6 +63,7 @@ type Options struct {
 	ClientIdleTimeout time.Duration
 	IOSNodeInfoDelay  time.Duration
 	MaxChatCache      int
+	ReplayChatHistory bool
 	NodeConn          NodeConnection
 	Metrics           *metrics.Metrics
 	Logger            *slog.Logger
@@ -76,6 +78,7 @@ func New(opts Options) *Proxy {
 		clientIdleTimeout: opts.ClientIdleTimeout,
 		iosNodeInfoDelay:  opts.IOSNodeInfoDelay,
 		maxChatCache:      opts.MaxChatCache,
+		replayChatEnabled: opts.ReplayChatHistory,
 		nodeConn:          opts.NodeConn,
 		metrics:           opts.Metrics,
 		logger:            opts.Logger,
