@@ -24,14 +24,15 @@ func testLogger() *slog.Logger {
 // TestFormatChatMessage tests HTML message formatting.
 func TestFormatChatMessage(t *testing.T) {
 	tests := []struct {
-		name    string
-		msg     metrics.ChatMessage
-		nodeDir map[uint32]metrics.NodeEntry
-		wantSub []string // substrings that must appear
-		wantNot []string // substrings that must NOT appear
+		name       string
+		msg        metrics.ChatMessage
+		nodeDir    map[uint32]metrics.NodeEntry
+		channelDir map[uint32]string
+		wantSub    []string // substrings that must appear
+		wantNot    []string // substrings that must NOT appear
 	}{
 		{
-			name: "basic message with name",
+			name: "basic message with name, no resolved channel name",
 			msg: metrics.ChatMessage{
 				From:     0xf9b0552c,
 				FromName: "jfett",
@@ -43,10 +44,24 @@ func TestFormatChatMessage(t *testing.T) {
 			},
 			wantSub: []string{
 				"<b>jfett</b>",
-				"<i>LongFast</i>",
-				"Hello!",
+				"<i>Primary</i>",
+				"Text: Hello!",
 				"<code>!f9b0552c</code>",
 			},
+			wantNot: []string{"LongFast"},
+		},
+		{
+			name: "channel name from telegram.channel_names config",
+			msg: metrics.ChatMessage{
+				From:     0xf9b0552c,
+				FromName: "jfett",
+				Channel:  0,
+				Text:     "Hello!",
+			},
+			nodeDir:    map[uint32]metrics.NodeEntry{},
+			channelDir: map[uint32]string{0: "MediumFast"},
+			wantSub:    []string{"<i>MediumFast</i>"},
+			wantNot:    []string{"LongFast"},
 		},
 		{
 			name: "message with RSSI and SNR",
@@ -60,8 +75,7 @@ func TestFormatChatMessage(t *testing.T) {
 			},
 			nodeDir: map[uint32]metrics.NodeEntry{},
 			wantSub: []string{
-				"-85 dBm",
-				"SNR 6.5 dB",
+				"Signal: SNR: 6.5dB / RSSI: -85dBm",
 			},
 		},
 		{
@@ -86,7 +100,7 @@ func TestFormatChatMessage(t *testing.T) {
 			},
 			nodeDir: map[uint32]metrics.NodeEntry{},
 			wantSub: []string{"<i>Ch 2</i>"},
-			wantNot: []string{"LongFast"},
+			wantNot: []string{"LongFast", "Primary"},
 		},
 		{
 			name: "no sender name — fallback to hex",
@@ -109,7 +123,7 @@ func TestFormatChatMessage(t *testing.T) {
 			nodeDir: map[uint32]metrics.NodeEntry{},
 			wantSub: []string{
 				"user&lt;script&gt;",
-				"&lt;b&gt;bold&lt;/b&gt; &amp; &#34;quoted&#34;",
+				"Text: &lt;b&gt;bold&lt;/b&gt; &amp; &#34;quoted&#34;",
 			},
 			wantNot: []string{"<script>"},
 		},
@@ -117,7 +131,7 @@ func TestFormatChatMessage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := formatChatMessage(tt.msg, tt.nodeDir)
+			result := formatChatMessage(tt.msg, tt.nodeDir, tt.channelDir)
 			for _, sub := range tt.wantSub {
 				if !strings.Contains(result, sub) {
 					t.Errorf("result missing %q\ngot: %s", sub, result)
@@ -497,13 +511,57 @@ func TestChannelList(t *testing.T) {
 
 // TestChannelName tests channel name resolution.
 func TestChannelName(t *testing.T) {
-	if got := channelName(0); got != "LongFast" {
-		t.Errorf("channelName(0) = %q, want %q", got, "LongFast")
+	// Nothing resolved: channel 0 falls back to "Primary" (not a guessed
+	// preset like "LongFast" — the mesh may run MediumFast, ShortFast, etc.),
+	// others fall back to "Ch N".
+	if got := channelName(0, nil); got != "Primary" {
+		t.Errorf("channelName(0, nil) = %q, want %q", got, "Primary")
 	}
-	if got := channelName(1); got != "Ch 1" {
-		t.Errorf("channelName(1) = %q, want %q", got, "Ch 1")
+	if got := channelName(1, nil); got != "Ch 1" {
+		t.Errorf("channelName(1, nil) = %q, want %q", got, "Ch 1")
 	}
-	if got := channelName(3); got != "Ch 3" {
-		t.Errorf("channelName(3) = %q, want %q", got, "Ch 3")
+	if got := channelName(3, nil); got != "Ch 3" {
+		t.Errorf("channelName(3, nil) = %q, want %q", got, "Ch 3")
+	}
+
+	// A configured name (telegram.channel_names) takes priority.
+	dir := map[uint32]string{0: "MediumFast", 2: "Admin"}
+	if got := channelName(0, dir); got != "MediumFast" {
+		t.Errorf("channelName(0, dir) = %q, want %q", got, "MediumFast")
+	}
+	if got := channelName(2, dir); got != "Admin" {
+		t.Errorf("channelName(2, dir) = %q, want %q", got, "Admin")
+	}
+	if got := channelName(1, dir); got != "Ch 1" {
+		t.Errorf("channelName(1, dir) = %q, want %q (no entry for channel 1)", got, "Ch 1")
+	}
+}
+
+// TestBot_channelNames tests that telegram.channel_names from config is
+// parsed into the bot's channel index -> display name map used for
+// formatting (invalid/out-of-range keys are ignored).
+func TestBot_channelNames(t *testing.T) {
+	b := New(config.TelegramConfig{
+		Token:  "x",
+		ChatID: 1,
+		ChannelNames: map[string]string{
+			"0":   "MediumFast",
+			"1":   "Admin",
+			"":    "ignored (not a number)",
+			"abc": "ignored (not a number)",
+			"-1":  "ignored (out of range)",
+			"8":   "ignored (out of range)",
+			"2":   "", // ignored (empty name)
+		},
+	}, metrics.New(10, 10), testLogger())
+
+	if got := b.channelNames[0]; got != "MediumFast" {
+		t.Errorf("channelNames[0] = %q, want %q", got, "MediumFast")
+	}
+	if got := b.channelNames[1]; got != "Admin" {
+		t.Errorf("channelNames[1] = %q, want %q", got, "Admin")
+	}
+	if len(b.channelNames) != 2 {
+		t.Errorf("channelNames = %v, want only entries for 0 and 1", b.channelNames)
 	}
 }

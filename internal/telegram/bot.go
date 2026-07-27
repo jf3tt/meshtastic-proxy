@@ -14,6 +14,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/jfett/meshtastic-proxy/internal/config"
@@ -25,12 +26,13 @@ var apiBaseURL = "https://api.telegram.org"
 
 // Bot forwards mesh chat messages to a Telegram channel.
 type Bot struct {
-	token    string
-	chatID   int64
-	channels map[uint32]bool // allowed mesh channel indices
-	metrics  *metrics.Metrics
-	logger   *slog.Logger
-	client   *http.Client
+	token        string
+	chatID       int64
+	channels     map[uint32]bool   // allowed mesh channel indices
+	channelNames map[uint32]string // channel index -> display name (telegram.channel_names)
+	metrics      *metrics.Metrics
+	logger       *slog.Logger
+	client       *http.Client
 }
 
 // New creates a new Telegram bot.
@@ -47,12 +49,23 @@ func New(cfg config.TelegramConfig, m *metrics.Metrics, logger *slog.Logger) *Bo
 		}
 	}
 
+	// Channel display names. TOML keys are strings ("0", "1", ...).
+	channelNames := make(map[uint32]string)
+	for k, name := range cfg.ChannelNames {
+		idx, err := strconv.Atoi(k)
+		if err != nil || idx < 0 || idx > 7 || name == "" {
+			continue
+		}
+		channelNames[uint32(idx)] = name
+	}
+
 	return &Bot{
-		token:    cfg.Token,
-		chatID:   cfg.ChatID,
-		channels: channels,
-		metrics:  m,
-		logger:   logger,
+		token:        cfg.Token,
+		chatID:       cfg.ChatID,
+		channels:     channels,
+		channelNames: channelNames,
+		metrics:      m,
+		logger:       logger,
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 		},
@@ -139,7 +152,7 @@ func (b *Bot) Run(ctx context.Context) error {
 // handleChatMessage formats and sends a single chat message to Telegram.
 func (b *Bot) handleChatMessage(ctx context.Context, msg metrics.ChatMessage) {
 	nodeDir := b.metrics.NodeDirectory()
-	text := formatChatMessage(msg, nodeDir)
+	text := formatChatMessage(msg, nodeDir, b.channelNames)
 
 	if err := b.sendMessage(ctx, text); err != nil {
 		b.logger.Error("failed to send telegram message",
