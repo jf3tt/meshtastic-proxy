@@ -1,8 +1,6 @@
 module github.com/jfett/meshtastic-proxy
 
-go 1.24.0
-
-toolchain go1.24.13
+go 1.25.0
 
 require (
 	buf.build/gen/go/meshtastic/protobufs/protocolbuffers/go v1.36.11-20260403110005-6d02e1586f05.1
@@ -24,8 +22,8 @@ require (
 	github.com/prometheus/procfs v0.16.1 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	golang.org/x/mod v0.33.0 // indirect
-	golang.org/x/net v0.50.0 // indirect
+	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
-	golang.org/x/sys v0.41.0 // indirect
+	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/tools v0.42.0 // indirect
 )
