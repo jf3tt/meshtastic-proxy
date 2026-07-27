@@ -66,6 +66,13 @@ type TelegramConfig struct {
 	Token    string `toml:"token"`    // Telegram Bot API token
 	ChatID   int64  `toml:"chat_id"`  // Target channel/group chat ID
 	Channels []int  `toml:"channels"` // Mesh channel indices to forward (e.g. [0, 1]); empty = primary only [0]
+
+	// ChannelNames sets the display name shown for a channel index in
+	// forwarded messages (e.g. {"0" = "MediumFast"}). Without an entry for a
+	// channel, forwarded messages label it generically ("Primary" / "Ch N")
+	// since the bridge has no other way to know the mesh's channel/preset
+	// name. TOML table keys must be strings, hence map[string]string.
+	ChannelNames map[string]string `toml:"channel_names"`
 }
 
 // MDNSConfig holds settings for mDNS service advertisement.
