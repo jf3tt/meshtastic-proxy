@@ -1,5 +1,11 @@
 # Build stage
-FROM golang:1.24-alpine AS builder
+# --platform=$BUILDPLATFORM + TARGETOS/TARGETARCH cross-compile the Go binary
+# natively on the build host instead of emulating the target arch via QEMU,
+# so multi-arch (linux/amd64, linux/arm64) builds stay fast.
+FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS builder
+
+ARG TARGETOS
+ARG TARGETARCH
 
 RUN apk add --no-cache git ca-certificates
 
@@ -8,7 +14,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/meshtastic-proxy ./cmd/meshtastic-proxy
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o /bin/meshtastic-proxy ./cmd/meshtastic-proxy
 
 # Runtime stage
 FROM alpine:3.20
