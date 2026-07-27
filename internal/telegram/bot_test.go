@@ -44,7 +44,7 @@ func TestFormatChatMessage(t *testing.T) {
 			wantSub: []string{
 				"<b>jfett</b>",
 				"<i>LongFast</i>",
-				"Hello!",
+				"Text: Hello!",
 				"<code>!f9b0552c</code>",
 			},
 		},
@@ -60,8 +60,7 @@ func TestFormatChatMessage(t *testing.T) {
 			},
 			nodeDir: map[uint32]metrics.NodeEntry{},
 			wantSub: []string{
-				"-85 dBm",
-				"SNR 6.5 dB",
+				"Signal: SNR: 6.5dB / RSSI: -85dBm",
 			},
 		},
 		{
@@ -109,7 +108,7 @@ func TestFormatChatMessage(t *testing.T) {
 			nodeDir: map[uint32]metrics.NodeEntry{},
 			wantSub: []string{
 				"user&lt;script&gt;",
-				"&lt;b&gt;bold&lt;/b&gt; &amp; &#34;quoted&#34;",
+				"Text: &lt;b&gt;bold&lt;/b&gt; &amp; &#34;quoted&#34;",
 			},
 			wantNot: []string{"<script>"},
 		},
