@@ -163,11 +163,11 @@ func (p *Proxy) handleNewConnection(ctx context.Context, conn net.Conn) {
 			if msg, err := decodeToRadioType(payload); err == nil {
 				switch v := msg.GetPayloadVariant().(type) {
 				case *pb.ToRadio_WantConfigId:
-					p.logger.Debug("client sent want_config_id, replying from cache",
+					p.logger.Debug("client sent want_config_id, queueing cache replay",
 						"client", client.Addr(),
 						"nonce", v.WantConfigId,
 					)
-					go p.replayCachedConfig(client, v.WantConfigId)
+					client.QueueReplay(v.WantConfigId)
 					return // do NOT forward to node
 				case *pb.ToRadio_Disconnect:
 					p.logger.Debug("client sent disconnect, closing client",
@@ -217,16 +217,27 @@ func (p *Proxy) handleNewConnection(ctx context.Context, conn net.Conn) {
 	p.metrics.PublishClients(addrs)
 	p.logger.Info("client connected", "client", client.Addr(), "total_clients", count)
 
-	// Start the client read/write loops immediately. Config delivery
-	// is deferred until the client sends want_config_id (which all
-	// standard Meshtastic clients do after TCP connect). The onMessage
-	// callback above intercepts that request and replies from cache
-	// with the client's nonce via replayCachedConfig.
-	p.wg.Add(1)
+	// Start the client I/O and its single bounded config replay worker.
+	p.wg.Add(2)
 	go func() {
 		defer p.wg.Done()
 		client.Run(ctx)
 	}()
+	go func() {
+		defer p.wg.Done()
+		p.replayLoop(client)
+	}()
+}
+
+func (p *Proxy) replayLoop(c *Client) {
+	for {
+		select {
+		case <-c.Done():
+			return
+		case nonce := <-c.ReplayRequests():
+			p.replayCachedConfig(c, nonce)
+		}
+	}
 }
 
 func (p *Proxy) registerClient(c *Client) {
@@ -272,16 +283,22 @@ func (p *Proxy) clientAddrsLocked() []string {
 	return addrs
 }
 
-// closeAllClients closes all active client connections for graceful shutdown.
-func (p *Proxy) closeAllClients() {
+// clientSnapshot copies the current client pointers while holding the registry
+// lock. Callers must release the lock before sending or closing because both
+// operations can synchronously invoke unregisterClient.
+func (p *Proxy) clientSnapshot() []*Client {
 	p.mu.RLock()
 	clients := make([]*Client, 0, len(p.clients))
 	for c := range p.clients {
 		clients = append(clients, c)
 	}
 	p.mu.RUnlock()
+	return clients
+}
 
-	for _, c := range clients {
+// closeAllClients closes all active client connections for graceful shutdown.
+func (p *Proxy) closeAllClients() {
+	for _, c := range p.clientSnapshot() {
 		c.Close()
 	}
 }
@@ -366,10 +383,9 @@ func classifyFromRadio(payload []byte) string {
 }
 
 func (p *Proxy) broadcast(payload []byte) {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-
-	for c := range p.clients {
+	// Never call Send while holding p.mu. A failed send closes the client and
+	// synchronously invokes unregisterClient, which needs the write lock.
+	for _, c := range p.clientSnapshot() {
 		// Safe to share the same slice: payload from the node channel is
 		// never mutated after being received, and WriteFrame copies it
 		// into a new frame buffer before writing.
@@ -381,10 +397,7 @@ func (p *Proxy) broadcast(payload []byte) {
 // Used to echo outgoing MeshPackets so that other clients see messages sent
 // by their peers through the shared node connection.
 func (p *Proxy) broadcastToOthers(payload []byte, sender *Client) {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-
-	for c := range p.clients {
+	for _, c := range p.clientSnapshot() {
 		if c != sender {
 			c.Send(payload)
 		}

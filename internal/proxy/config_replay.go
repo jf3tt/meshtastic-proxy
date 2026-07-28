@@ -127,7 +127,7 @@ func (p *Proxy) replayCachedConfig(c *Client, clientNonce uint32) {
 			}
 		}
 
-		if !c.Send(outFrame) {
+		if !c.SendReplay(outFrame) {
 			p.logger.Debug("replay interrupted, client disconnected",
 				"client", c.Addr(),
 				"sent", sent,
@@ -313,7 +313,7 @@ func (p *Proxy) replayChatHistory(c *Client) {
 
 	sent := 0
 	for _, entry := range entries {
-		if !c.Send(entry.message) {
+		if !c.SendReplay(entry.message) {
 			p.logger.Debug("chat replay interrupted, client disconnected",
 				"client", c.Addr(),
 				"sent", sent,
@@ -326,7 +326,7 @@ func (p *Proxy) replayChatHistory(c *Client) {
 		// Send the routing ACK immediately after the message so that
 		// the client sees the message as delivered.
 		if entry.ack != nil {
-			if !c.Send(entry.ack) {
+			if !c.SendReplay(entry.ack) {
 				p.logger.Debug("chat replay interrupted during ACK, client disconnected",
 					"client", c.Addr(),
 					"sent", sent,
