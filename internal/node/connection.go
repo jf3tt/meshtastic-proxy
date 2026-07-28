@@ -17,6 +17,8 @@ import (
 	"github.com/jfett/meshtastic-proxy/internal/protocol"
 )
 
+const nodeWriteTimeout = 15 * time.Second
+
 // Connection manages a persistent TCP connection to a Meshtastic node
 // with automatic reconnection using exponential backoff.
 type Connection struct {
@@ -657,6 +659,9 @@ func (c *Connection) writeLoop(ctx context.Context, conn net.Conn) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case payload := <-c.toNode:
+			if err := conn.SetWriteDeadline(time.Now().Add(nodeWriteTimeout)); err != nil {
+				return fmt.Errorf("setting node write deadline: %w", err)
+			}
 			if err := protocol.WriteFrame(conn, payload); err != nil {
 				return fmt.Errorf("writing frame to node: %w", err)
 			}
